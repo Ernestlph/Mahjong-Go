@@ -46,6 +46,50 @@ func GetPlayerChoice(reader *bufio.Reader, prompt string) bool {
 	return strings.ToLower(strings.TrimSpace(input)) == "y"
 }
 
+// GetPlayerRiichiChoice presents the player with valid Riichi discard options
+// and prompts them to choose one or cancel.
+// Returns the index of the chosen option in the slice (0-based), and true if a choice was made.
+// Returns -1 and false if the player cancels.
+func GetPlayerRiichiChoice(reader *bufio.Reader, options []RiichiOption) (int, bool) {
+	if len(options) == 0 {
+		fmt.Println("Error: No Riichi options available.") // Should not happen if called correctly
+		return -1, false
+	}
+
+	fmt.Println("\n--- Declare Riichi ---")
+	fmt.Println("Choose discard to declare Riichi:")
+	for i, opt := range options {
+		// Sort waits for display consistency
+		sort.Sort(BySuitValue(opt.Waits))
+		fmt.Printf("[%d] Discard %s -> Waits: %v\n",
+			i+1, // 1-based index for user
+			opt.DiscardTile.Name,
+			TilesToNames(opt.Waits), // Use helper for clean names
+		)
+	}
+	fmt.Printf("[0] Cancel Riichi\n")
+	fmt.Print("Enter choice: ")
+
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("Error reading input, canceling Riichi.", err)
+		return -1, false
+	}
+	choice, err := strconv.Atoi(strings.TrimSpace(input))
+	if err != nil || choice < 0 || choice > len(options) {
+		fmt.Println("Invalid choice, canceling Riichi.")
+		return -1, false
+	}
+
+	if choice == 0 {
+		fmt.Println("Riichi cancelled.")
+		return -1, false // User cancelled
+	}
+
+	// Return 0-based index of the chosen option
+	return choice - 1, true
+}
+
 // GetChiChoice prompts player to choose which Chi sequence (if multiple options).
 // Returns choice number (1-based) and the 3 tiles for the chosen sequence, or 0, nil if cancelled/invalid.
 func GetChiChoice(gs *GameState, player *Player, discardedTile Tile) (int, []Tile) {

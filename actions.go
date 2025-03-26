@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 	// Added for checking Kan types
 )
 
@@ -613,11 +614,12 @@ func HandleKanAction(gs *GameState, player *Player, targetTile Tile, kanType str
 	}
 }
 
-// HandleRiichiAction processes Riichi declaration.
-// Returns true if successful (Riichi declared, discard made), false otherwise.
+// HandleRiichiAction function...
+// Use both return values from CanDeclareRiichi
 func HandleRiichiAction(gs *GameState, player *Player, discardIndex int) bool {
-	if !CanDeclareRiichi(player, gs) {
-		fmt.Println("Cannot declare Riichi (check conditions: concealed, tenpai, score >= 1000, wall tiles >= 4).")
+	canRiichi, _ := CanDeclareRiichi(player, gs) // Get both values, ignore options here if not needed
+	if !canRiichi {                              // Use the boolean result
+		fmt.Println("Cannot declare Riichi (check conditions failed again - internal check).")
 		return false // Failed
 	}
 
@@ -808,6 +810,7 @@ func HandleWin(gs *GameState, winner *Player, winningTile Tile, isTsumo bool) {
 
 // PromptDiscard forces the specified player (usually after a call or Kan) to discard.
 func PromptDiscard(gs *GameState, player *Player) {
+
 	fmt.Printf("\n--- %s's Turn (Must Discard after Call/Kan) ---\n", player.Name)
 	DisplayPlayerState(player) // Show current hand
 
@@ -845,7 +848,21 @@ func PromptDiscard(gs *GameState, player *Player) {
 
 	// --- Normal Discard after Call/Kan (if no further Kan declared) ---
 	// Player needs to discard ONE tile if they have any left.
-	if len(player.Hand) == 0 {
+	// The goal is to reach the correct number of tiles for the meld configuration.
+	// e.g., 1 meld -> 10 tiles, 2 melds -> 7 tiles, 3 melds -> 4 tiles, 4 melds -> 1 tile (pair)
+	// Reference HandSize correctly for calculating target size based on melds
+	numMeldTiles := 0
+	numKans := 0 // Kans 'consume' an extra tile conceptually
+	for _, m := range player.Melds {
+		numMeldTiles += len(m.Tiles)
+		if strings.Contains(m.Type, "Kan") {
+			numKans++
+		}
+	}
+	// Expected tiles in hand after discard = 13 tiles base - 3 tiles per meld (excluding pair)
+	// Or simpler: after discard, total tiles (hand + melds) should be 13
+	// Let's just check if the hand is empty instead of complex size calculation
+	if len(player.Hand) == 0 { // Check if HandSize is correct
 		fmt.Printf("Error: Player %s has no tiles to discard after call/Kan?\n", player.Name)
 		// This state indicates an error elsewhere. Abort?
 		gs.GamePhase = PhaseRoundEnd // Treat as error/end round?

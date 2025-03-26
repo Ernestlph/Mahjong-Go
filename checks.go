@@ -661,10 +661,56 @@ func CanDeclareKanOnHand(player *Player, checkTile Tile) (string, Tile) {
 	return "", Tile{}
 }
 
+// FindRiichiOptions iterates through a 14-tile hand and finds all discards
+// that result in a Tenpai state, returning the discard and resulting waits.
+// Assumes hand includes the drawn tile (14 tiles total).
+func FindRiichiOptions(hand14 []Tile, melds []Meld) []RiichiOption {
+	options := []RiichiOption{}
+	if len(hand14) != HandSize+1 {
+		// Should be called with 14 tiles
+		return options
+	}
+
+	// Ensure melds are only concealed (Ankan) for Riichi check validity context
+	for _, m := range melds {
+		if !m.IsConcealed {
+			return options // Cannot Riichi with open melds
+		}
+	}
+
+	// Iterate through each tile as a potential discard
+	for i := 0; i < len(hand14); i++ {
+		discardCandidate := hand14[i]
+		// Create temporary 13-tile hand
+		tempHand13 := make([]Tile, 0, HandSize)
+		for j, t := range hand14 {
+			if i != j {
+				tempHand13 = append(tempHand13, t)
+			}
+		}
+		sort.Sort(BySuitValue(tempHand13)) // Sort for consistent checks
+
+		// Check if discarding this tile results in Tenpai
+		if IsTenpai(tempHand13, melds) {
+			// If Tenpai, find the waits
+			waits := FindTenpaiWaits(tempHand13, melds)
+			if len(waits) > 0 {
+				options = append(options, RiichiOption{
+					DiscardIndex: i,
+					DiscardTile:  discardCandidate,
+					Waits:        waits,
+				})
+			}
+		}
+	}
+	return options
+}
+
 // CanDeclareRiichi checks if the player can declare Riichi.
-func CanDeclareRiichi(player *Player, gs *GameState) bool {
+func CanDeclareRiichi(player *Player, gs *GameState) (bool, []RiichiOption) {
+	options := []RiichiOption{} // Initialize empty slice
 	if player.IsRiichi {
-		return false // Already in Riichi
+		return false, options // Already in Riichi
 	}
 	// Must be Menzenchin (concealed hand)
 	isConcealed := true
@@ -676,38 +722,24 @@ func CanDeclareRiichi(player *Player, gs *GameState) bool {
 		}
 	}
 	if !isConcealed {
-		return false // Hand is open
+		return false, options // Hand is open
 	}
 	// Must have >= 1000 points
 	if player.Score < 1000 {
-		return false // Not enough points
+		return false, options // Not enough points
 	}
 	// Must be >= 4 tiles left in the wall
 	if len(gs.Wall) < 4 {
-		return false // Not enough wall tiles left for potential Ippatsu/Ura Dora
+		return false, options // Not enough wall tiles left for potential Ippatsu/Ura Dora
 	}
 	// Must have 14 tiles before discard
 	if len(player.Hand) != HandSize+1 {
 		// fmt.Printf("Debug: CanDeclareRiichi incorrect hand size %d\n", len(player.Hand)) // Debug
-		return false // Must be holding 13 + drawn tile
+		return false, options // Must be holding 13 + drawn tile
 	}
+	// Check if any discard leads to Tenpai by finding options
+	options = FindRiichiOptions(player.Hand, player.Melds)
 
-	// Check if *any* discard leaves the remaining 13 tiles Tenpai
-	foundTenpaiDiscard := false
-	for i := 0; i < len(player.Hand); i++ {
-		// Create temporary 13-tile hand after hypothetical discard
-		tempHand13 := make([]Tile, 0, HandSize)
-		for j, t := range player.Hand {
-			if i != j {
-				tempHand13 = append(tempHand13, t)
-			}
-		}
-		// Check Tenpai with the *original* melds (which are all concealed/Ankan for Riichi)
-		if IsTenpai(tempHand13, player.Melds) {
-			foundTenpaiDiscard = true
-			break // Found at least one discard that results in Tenpai
-		}
-	}
+	return len(options) > 0, options // Can Riichi if any valid options were found
 
-	return foundTenpaiDiscard // Can Riichi if concealed, enough points/wall, and is Tenpai after discarding *some* tile
 }

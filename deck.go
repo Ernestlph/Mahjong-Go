@@ -45,10 +45,10 @@ func GenerateDeck() []Tile {
 	}
 
 	// Dragon tiles
-	for i, dragon := range dragons {
+	for i, dragonName := range dragons {
 		dragonValue := i + 1
 		for j := 0; j < 4; j++ {
-			deck = append(deck, NewTile("Dragon", dragonValue, dragon, false, idCounter))
+			deck = append(deck, NewTile("Dragon", dragonValue, dragonName, false, idCounter))
 			idCounter++
 		}
 	}
@@ -87,8 +87,8 @@ func GetAllPossibleTiles() []Tile {
 		uniqueTiles = append(uniqueTiles, NewTile("Wind", i+1, wind, false, idCounter))
 		idCounter--
 	}
-	for i, dragon := range dragons {
-		uniqueTiles = append(uniqueTiles, NewTile("Dragon", i+1, dragon, false, idCounter))
+	for i, dragonName := range dragons {
+		uniqueTiles = append(uniqueTiles, NewTile("Dragon", i+1, dragonName, false, idCounter))
 		idCounter--
 	}
 

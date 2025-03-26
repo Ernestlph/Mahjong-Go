@@ -48,6 +48,13 @@ type Player struct {
 	// Add other state as needed (e.g., Menzenchin status - can be derived)
 }
 
+// RiichiOption stores details about a possible Riichi declaration
+type RiichiOption struct {
+	DiscardIndex int    // Index of the tile to discard in the 14-tile hand
+	DiscardTile  Tile   // The tile to discard
+	Waits        []Tile // List of tiles the hand will wait on after discard
+}
+
 // GameState represents the current game state
 type GameState struct {
 	Wall               []Tile // Remaining drawable tiles

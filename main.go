@@ -1,3 +1,4 @@
+// main.go
 package main
 
 import (
@@ -6,7 +7,7 @@ import (
 	"time"
 )
 
-// Constants
+// Constants  <<<<<<<<<<<<<<<<<<<<< HERE THEY ARE
 const (
 	HandSize        = 13
 	DeadWallSize    = 14  // Total tiles in the dead wall
@@ -14,6 +15,10 @@ const (
 	MaxRevealedDora = 5   // Max number of Dora indicators (1 initial + 4 Kan) that can be revealed
 	TotalTiles      = 136 // 4 * (9*3 + 7)
 )
+
+// <<<<<<<<<<<<<<<<<<<<< END OF DEFINITIONS
+
+// ... (Constants remain the same) ...
 
 func main() {
 	rand.Seed(time.Now().UnixNano()) // Seed random number generator once
@@ -42,28 +47,29 @@ func main() {
 			gameState.GamePhase = PhaseRoundEnd // Simple end for now
 			break
 		}
-		fmt.Printf("%s draws: %s\n", currentPlayer.Name, drawnTile.Name)
+		fmt.Printf("%s draws: %s\n", currentPlayer.Name, drawnTile.Name) // Show drawn tile name
+		// Show hand only *after* draw for human player
 		if isHumanPlayer {
-			DisplayPlayerState(currentPlayer) // Show human player their hand + draw
+			// DisplayPlayerState shows hand AFTER draw, before action/discard
+			// DisplayPlayerState(currentPlayer)
 		}
 
-		// --- Action Phase (Tsumo, Kan) ---
-		canTsumo := CanDeclareTsumo(currentPlayer, gameState) // Pass gameState if needed by Yaku checks later
-		// Check for Kan involving the *drawn* tile (Ankan or Shouminkan)
-		possibleKanType, kanTargetTile := CanDeclareKanOnDraw(currentPlayer, drawnTile) // Check specific Kan types on draw
+		// --- Action Phase (Tsumo, Kan on Draw) ---
+		canTsumo := CanDeclareTsumo(currentPlayer, gameState)
+		possibleKanType, kanTargetTile := CanDeclareKanOnDraw(currentPlayer, drawnTile)
 
 		actionTaken := false
 		if canTsumo {
 			if isHumanPlayer {
+				// Display hand *before* Tsumo choice
+				DisplayPlayerState(currentPlayer)
 				if GetPlayerChoice(gameState.InputReader, "Declare TSUMO? (y/n): ") {
-					HandleWin(gameState, currentPlayer, drawnTile, true) // Pass gs
+					HandleWin(gameState, currentPlayer, drawnTile, true)
 					actionTaken = true
-					// HandleWin should set GamePhase to RoundEnd/GameEnd
 				}
 			} else {
-				// Basic AI: Always Tsumo if possible
 				fmt.Printf("%s declares TSUMO!\n", currentPlayer.Name)
-				HandleWin(gameState, currentPlayer, drawnTile, true) // Pass gs
+				HandleWin(gameState, currentPlayer, drawnTile, true)
 				actionTaken = true
 			}
 		}
@@ -71,110 +77,148 @@ func main() {
 		// Check for Kan only if Tsumo wasn't declared
 		if !actionTaken && possibleKanType != "" {
 			if isHumanPlayer {
+				// Display hand *before* Kan choice
+				DisplayPlayerState(currentPlayer)
 				if GetPlayerChoice(gameState.InputReader, fmt.Sprintf("Declare %s with %s? (y/n): ", possibleKanType, kanTargetTile.Name)) {
-					HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType) // Pass gs
-					actionTaken = true                                                        // Kan action handles the next step (Rinshan draw + discard prompt)
+					HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType)
+					actionTaken = true // Kan action handles the next step
 				}
 			} else {
 				// Basic AI: Always Kan if possible? (Maybe add some logic later)
-				// fmt.Printf("%s declares %s!\n", currentPlayer.Name, possibleKanType)
-				// HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType) // Pass gs
-				// actionTaken = true
-				fmt.Printf("(%s could declare %s, skipping for AI)\n", currentPlayer.Name, possibleKanType) // AI skips Kan for simplicity now
+				// fmt.Printf("(%s could declare %s, skipping for AI)\n", currentPlayer.Name, possibleKanType) // AI skips Kan for simplicity now
+				// AI Decides to Kan (example)
+				fmt.Printf("%s declares %s!\n", currentPlayer.Name, possibleKanType)
+				HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType) // Pass gs
+				actionTaken = true
 			}
 		}
 
 		if actionTaken {
 			// If Tsumo or Kan occurred, the turn structure changes or ends.
-			// Kan handler calls PromptDiscard. Tsumo ends the round.
 			if gameState.GamePhase == PhaseRoundEnd || gameState.GamePhase == PhaseGameEnd {
 				break
-			} // End loop if win occurred
-			continue // Kan handler will manage the next discard prompt
+			}
+			continue // Kan handler will manage the next discard prompt or turn ended with Tsumo
 		}
 
 		// --- Discard Phase ---
-		canRiichi := CanDeclareRiichi(currentPlayer, gameState) // Pass gs
-		discardIndex := -1
+		// Check Riichi possibilities FIRST
+		canRiichi, riichiOptions := CanDeclareRiichi(currentPlayer, gameState) // Gets bool and options
+		discardIndex := -1                                                     // Initialize discard index
+
+		riichiDeclaredSuccessfully := false // Flag to track if Riichi was handled
 
 		if isHumanPlayer {
-			DisplayPlayerState(currentPlayer) // Ensure hand is visible before discard choice
+			// Display hand state before any discard choice (Riichi or normal)
+			DisplayPlayerState(currentPlayer)
 
-			// Riichi Option
 			if canRiichi {
-				if GetPlayerChoice(gameState.InputReader, "Declare RIICHI? (y/n): ") {
-					// Player must choose which tile to discard for Riichi
-					fmt.Println("Choose discard for Riichi:")
-					discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
-					if HandleRiichiAction(gameState, currentPlayer, discardIndex) { // Pass gs
-						// Riichi action handled discard and checks, continue to next player turn potentially
+				// Present Riichi options
+				chosenOptionIndex, choiceMade := GetPlayerRiichiChoice(gameState.InputReader, riichiOptions)
+
+				if choiceMade {
+					// Player chose a Riichi option
+					selectedOption := riichiOptions[chosenOptionIndex]
+					discardIndex = selectedOption.DiscardIndex // Get the index to discard
+
+					// Attempt Riichi declaration
+					if HandleRiichiAction(gameState, currentPlayer, discardIndex) {
+						riichiDeclaredSuccessfully = true // Riichi was declared and discard happened
+						// HandleRiichiAction calls DiscardTile, which handles next steps
+						// Check if game ended due to Ron on Riichi discard
 						if gameState.GamePhase == PhaseRoundEnd || gameState.GamePhase == PhaseGameEnd {
 							break
-						} // Ron on Riichi discard
-						continue // Skip normal discard, Riichi handler did it
+						}
+						// continue // Turn logic handled by DiscardTile called within HandleRiichiAction
 					} else {
-						// Riichi failed (e.g., invalid choice), fall back to normal discard
-						fmt.Println("Riichi declaration failed or canceled.")
+						// Riichi failed validation within HandleRiichiAction (e.g., chosen discard was wrong - safety check)
+						fmt.Println("Riichi declaration failed validation. Proceeding with normal discard.")
+						// Fall back to normal discard choice
 						discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
 					}
-
 				} else {
-					// Player chose not to Riichi
+					// Player cancelled Riichi choice
+					fmt.Println("Proceeding with normal discard.")
 					discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
 				}
 			} else {
 				// Cannot Riichi, just get normal discard
 				discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
 			}
-		} else {
-			// Basic AI Discard Logic
+		} else { // AI Logic
 			fmt.Printf("(%s thinking...)\n", currentPlayer.Name)
 			if currentPlayer.IsRiichi {
-				// Must discard drawn unless Kan (Kan handled above)
-				// Find the index of the drawn tile (which should be the last one after sorting)
-				if len(currentPlayer.Hand) > HandSize { // Should have 14 tiles before discard
+				// AI is already in Riichi - must discard drawn tile unless Kan
+				// Kan was handled earlier. Find index of drawn tile.
+				// Assuming drawn tile is last after sort (may need better tracking)
+				if len(currentPlayer.Hand) == HandSize+1 {
 					discardIndex = len(currentPlayer.Hand) - 1
 				} else {
 					fmt.Println("Error: AI in Riichi but hand size isn't 14?")
 					discardIndex = 0 // Fallback
 				}
-			} else {
-				// Very basic: discard the drawn tile
-				if len(currentPlayer.Hand) > HandSize {
-					discardIndex = len(currentPlayer.Hand) - 1 // Index of drawn tile after sort
+			} else { // AI not in Riichi
+				if canRiichi { // AI *could* declare Riichi
+					// Basic AI: Always Riichi if possible? Choose first option?
+					fmt.Printf("(%s can Riichi, AI chooses to Riichi!)\n", currentPlayer.Name)
+					chosenOption := riichiOptions[0] // AI picks first option
+					discardIndex = chosenOption.DiscardIndex
+					if HandleRiichiAction(gameState, currentPlayer, discardIndex) {
+						riichiDeclaredSuccessfully = true
+						if gameState.GamePhase == PhaseRoundEnd || gameState.GamePhase == PhaseGameEnd {
+							break
+						}
+						// continue // Handled by DiscardTile within HandleRiichiAction
+					} else {
+						fmt.Println("Error: AI Riichi failed validation?")
+						discardIndex = len(currentPlayer.Hand) - 1 // Fallback: discard drawn
+					}
 				} else {
-					fmt.Println("Error: AI not in Riichi but hand size isn't 14?")
-					discardIndex = 0 // Fallback
+					// AI cannot Riichi, basic discard: drawn tile
+					if len(currentPlayer.Hand) == HandSize+1 {
+						discardIndex = len(currentPlayer.Hand) - 1 // Index of drawn tile after sort?
+					} else {
+						fmt.Println("Error: AI not in Riichi but hand size isn't 14?")
+						discardIndex = 0 // Fallback
+					}
 				}
-				// Improvement: Discard loose honors/terminals first? Needs state analysis.
 			}
-			if discardIndex < 0 || discardIndex >= len(currentPlayer.Hand) { // Safety check
-				fmt.Printf("Error: AI calculated invalid discard index %d. Defaulting to 0.\n", discardIndex)
-				discardIndex = 0
+			// Safety check for AI discard index
+			if !riichiDeclaredSuccessfully && (discardIndex < 0 || discardIndex >= len(currentPlayer.Hand)) {
+				fmt.Printf("Error: AI calculated invalid discard index %d (Hand Size %d). Defaulting to 0.\n", discardIndex, len(currentPlayer.Hand))
+				if len(currentPlayer.Hand) > 0 {
+					discardIndex = 0
+				} else {
+					discardIndex = -1 /* No tiles? Error */
+				}
 			}
-		}
+		} // End AI Logic
 
-		// Perform the discard (if not handled by Riichi/Kan/Tsumo)
-		if discardIndex != -1 {
-			_, gameShouldEnd := DiscardTile(gameState, currentPlayer, discardIndex) // Pass gs
+		// Perform the discard *only if* it wasn't handled by Riichi declaration
+		if !riichiDeclaredSuccessfully && discardIndex != -1 {
+			// DiscardTile handles calls, Furiten update, and turn advancement
+			_, gameShouldEnd := DiscardTile(gameState, currentPlayer, discardIndex)
 			if gameShouldEnd {
-				// Ron occurred
+				// Ron occurred on the normal discard
 				break // End the main loop
 			}
-			// If DiscardTile resulted in a call (Pon/Chi/Kan), CurrentPlayerIndex was updated
-			// If no call, CurrentPlayerIndex was advanced by NextPlayer() inside DiscardTile's path
+		} else if !riichiDeclaredSuccessfully && discardIndex == -1 {
+			fmt.Println("Error: No valid discard index determined.")
+			// Handle error state? Maybe end round as draw?
+			gameState.GamePhase = PhaseRoundEnd
+			break
 		}
 
-		// Check for end conditions again (e.g., wall empty after calls)
-		if len(gameState.Wall) == 0 && gameState.GamePhase != PhaseRoundEnd {
-			fmt.Println("\nWall is empty after calls! Round ends in a draw (Ryuukyoku).")
+		// Check for end conditions again (e.g., wall empty after calls/discard)
+		if len(gameState.Wall) == 0 && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
+			fmt.Println("\nWall is empty! Round ends in a draw (Ryuukyoku).")
 			// *** Handle Ryuukyoku scoring/dealer retention ***
 			gameState.GamePhase = PhaseRoundEnd // Simple end for now
 			break
 		}
 
-		// Small delay for non-human players to simulate thinking/make output readable
-		if !isHumanPlayer && gameState.GamePhase != PhaseRoundEnd {
+		// Small delay for non-human players
+		if !isHumanPlayer && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
 			time.Sleep(500 * time.Millisecond)
 		}
 
@@ -182,5 +226,6 @@ func main() {
 
 	fmt.Println("\n--- Final Game State ---")
 	DisplayGameState(gameState)
+	// TODO: Display final scores, winner, etc.
 	fmt.Println("Game Over.")
 }
