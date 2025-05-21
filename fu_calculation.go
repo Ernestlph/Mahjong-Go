@@ -4,6 +4,16 @@ import (
 	"math"
 )
 
+// groupContainsTileID checks if a tile ID exists in a list of DecomposedGroup tiles
+func groupContainsTileID(group DecomposedGroup, tileID int) bool {
+	for _, t := range group.Tiles {
+		if t.ID == tileID {
+			return true
+		}
+	}
+	return false
+}
+
 // CalculateFu calculates the Fu for a winning hand.
 // It requires the decomposition of the hand, win conditions, and game state.
 func CalculateFu(player *Player, decomposition []DecomposedGroup, agariHai Tile, isTsumo bool, isMenzen bool, yakus []YakuResult, gs *GameState) int {

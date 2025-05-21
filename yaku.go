@@ -76,9 +76,12 @@ func IdentifyYaku(player *Player, agariHai Tile, isTsumo bool, gs *GameState) ([
 	}
 
 	// Pinfu - Requires Menzen, 4 sequences, non-yakuhai pair, ryanmen wait.
-	if ok, han := checkPinfu(player, agariHai, isMenzen, allTiles); ok {
-		results = append(results, YakuResult{"Pinfu", han})
-		totalHan += han
+	// Call to the already defined checkPinfu.
+	if isMenzen { 
+		if ok, han := checkPinfu(player, agariHai, isMenzen, allTiles, gs); ok {
+			results = append(results, YakuResult{"Pinfu", han})
+			totalHan += han
+		}
 	}
 
 	// Tanyao (All Simples) - Check if Kuitan (open Tanyao) is allowed. Assuming YES for now.
@@ -100,18 +103,18 @@ func IdentifyYaku(player *Player, agariHai Tile, isTsumo bool, gs *GameState) ([
 	}
 
 	// Rinshan Kaihou (After Kan Draw)
-	// TODO: Needs flag passed from HandleKanAction if win was on Rinshan tile.
-	// if isRinshanWin {
-	// 	results = append(results, YakuResult{"Rinshan Kaihou", 1})
-	// 	totalHan += 1
-	// }
+	if ok, han := checkRinshanKaihou(gs, isTsumo); ok {
+		results = append(results, YakuResult{"Rinshan Kaihou", han})
+		totalHan += han
+	}
 
 	// Chankan (Robbing a Kan)
-	// TODO: Needs flag passed from HandleKanAction if win was Chankan.
-	// if isChankanWin {
-	// 	results = append(results, YakuResult{"Chankan", 1})
-	// 	totalHan += 1
-	// }
+	if !isTsumo { // Chankan is always a Ron
+		if ok, han := checkChankan(gs); ok {
+			results = append(results, YakuResult{"Chankan", han})
+			totalHan += han
+		}
+	}
 
 	// --- 2 Han Yaku ---
 	chiitoitsuFound := false
@@ -123,20 +126,21 @@ func IdentifyYaku(player *Player, agariHai Tile, isTsumo bool, gs *GameState) ([
 
 	// Toitoi (All Pungs) - Cannot be Chiitoitsu
 	if !chiitoitsuFound {
-		if ok, han := checkToitoi(player, allTiles); ok {
+		// Call to the already defined checkToitoi.
+		if ok, han := checkToitoi(player, allTiles); ok { 
 			results = append(results, YakuResult{"Toitoi", han})
 			totalHan += han
 		}
 	}
 
 	// Sanankou (Three Concealed Pungs) - Cannot be Chiitoitsu
-	// TODO: Needs robust decomposition or specific checks. Needs care with Ron vs Tsumo completion.
-	// if !chiitoitsuFound {
-	//     if ok, han := checkSanankou(player, agariHai, isTsumo, isMenzen, allTiles); ok {
-	//         results = append(results, YakuResult{"Sanankou", 2})
-	//         totalHan += han
-	//     }
-	// }
+	if !chiitoitsuFound {
+		// Call to the already defined checkSanankou. Signature: checkSanankou(player *Player, agariHai Tile, isTsumo bool, allTiles []Tile)
+		if ok, han := checkSanankou(player, agariHai, isTsumo, allTiles); ok { 
+			results = append(results, YakuResult{"Sanankou", han}) 
+			totalHan += han
+		}
+	}
 
 	// Sankantsu (Three Kans)
 	// TODO: Check player.Melds for 3 Kans.
@@ -172,26 +176,40 @@ func IdentifyYaku(player *Player, agariHai Tile, isTsumo bool, gs *GameState) ([
 
 	// --- 3+ Han Yaku ---
 
-	if !chiitoitsuFound { // Iipeikou needs sequences
-		if ok, han := checkIipeikou(player, isMenzen, allTiles); ok {
+	// Iipeikou (One Pure Double Sequence) - 1 Han. Cannot be Chiitoitsu. Requires Menzen.
+	if !chiitoitsuFound && isMenzen {
+		// Call to the already defined checkIipeikou.
+		if ok, han := checkIipeikou(player, isMenzen, allTiles); ok { 
 			results = append(results, YakuResult{"Iipeikou", han})
 			totalHan += han
-
 		}
 	}
 
-	// Ryanpeikou (Two Iipeikou) - Overrides Iipeikou and Chiitoitsu
-	// TODO: Implement Ryanpeikou check (needs decomposition)
-	// if ok, han := checkRyanpeikou(player, isMenzen, allTiles); ok {
-	//     // Remove Iipeikou and Chiitoitsu if found
-	//     results = removeYakuByName(results, "Iipeikou")
-	//     results = removeYakuByName(results, "Chiitoitsu")
-	//     totalHan = calculateTotalHan(results) // Recalculate Han
-	//     results = append(results, YakuResult{"Ryanpeikou", 3})
-	//     totalHan += 3
-	//     iipeikouFound = false // No longer counts as single iipeikou
-	//     chiitoitsuFound = false
-	// }
+	// Ryanpeikou (Two Iipeikou) - 3 Han. Overrides Iipeikou. Requires Menzen. Cannot be Chiitoitsu.
+	if !chiitoitsuFound && isMenzen {
+		if okRyan, hanRyan := checkRyanpeikou(player, isMenzen, allTiles); okRyan {
+			// Remove Iipeikou if it was previously added
+			newResults := []YakuResult{}
+			foundIipeikou := false
+			for _, r := range results {
+				if r.Name == "Iipeikou" {
+					foundIipeikou = true
+					// Do not add Iipeikou to newResults
+				} else {
+					newResults = append(newResults, r)
+				}
+			}
+			if foundIipeikou {
+				// Adjust totalHan if it was being summed incrementally.
+				// For simplicity, finalHan is recalculated at the end, so direct subtraction here isn't critical
+				// but good practice if other logic depended on intermediate totalHan.
+				// totalHan -= 1 // Assuming Iipeikou is 1 Han
+			}
+			results = newResults
+			results = append(results, YakuResult{"Ryanpeikou", hanRyan}) // hanRyan is 3
+			// totalHan will be recalculated at the end.
+		}
+	}
 
 	honitsuFound := false
 	if ok, han := checkHonitsu(allTiles, isMenzen); ok {
@@ -200,14 +218,14 @@ func IdentifyYaku(player *Player, agariHai Tile, isTsumo bool, gs *GameState) ([
 		honitsuFound = true
 	}
 
-	// Junchan (Outside Hand with Terminals) - Cannot be Chiitoitsu
-	// TODO: Implement Junchan (needs decomposition, check all groups+pair have terminal)
-	// if !chiitoitsuFound {
-	//     if ok, han := checkJunchan(player, isMenzen, allTiles); ok {
-	//         results = append(results, YakuResult{"Junchan", han}) // 3 concealed, 2 open
-	//         totalHan += han
-	//     }
-	// }
+	// Junchan (Outside Hand with Terminals) - Cannot be Chiitoitsu. 3 Han Menzen, 2 Han Open.
+	if !chiitoitsuFound {
+		// Signature: checkJunchan(player *Player, isMenzen bool, allTiles []Tile)
+		if ok, han := checkJunchan(player, isMenzen, allTiles); ok {
+			results = append(results, YakuResult{"Junchan", han})
+			// totalHan will be updated by final loop.
+		}
+	}
 
 	// --- 6+ Han Yaku ---
 	// Chinitsu (Pure Hand) - Overrides Honitsu
@@ -255,6 +273,145 @@ func IdentifyYaku(player *Player, agariHai Tile, isTsumo bool, gs *GameState) ([
 }
 
 // --- Helper Functions ---
+
+// checkDaisangen (Big Three Dragons) - Yakuman (13 Han)
+func checkDaisangen(player *Player, allTiles []Tile) (bool, string, int) {
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, "", 0
+	}
+
+	dragonPungKan := map[int]bool{1: false, 2: false, 3: false} // White, Green, Red
+
+	for _, group := range decomposition {
+		if group.Type == TypeTriplet || group.Type == TypeQuad {
+			if len(group.Tiles) > 0 && group.Tiles[0].Suit == "Dragon" {
+				dragonPungKan[group.Tiles[0].Value] = true
+			}
+		}
+	}
+
+	if dragonPungKan[1] && dragonPungKan[2] && dragonPungKan[3] {
+		return true, "Daisangen", 13
+	}
+	return false, "", 0
+}
+
+// checkSuuankou (Four Concealed Pungs/Kans) - Yakuman (13 Han)
+// Note: Suuankou Tanki (double Yakuman on pair wait) is not differentiated here.
+func checkSuuankou(player *Player, agariHai Tile, isTsumo bool, isMenzen bool, allTiles []Tile) (bool, string, int) {
+	if !isMenzen {
+		return false, "", 0
+	}
+
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, "", 0
+	}
+
+	concealedPungKanCount := 0
+	for _, group := range decomposition {
+		isEffectiveConcealedMeld := false
+		if group.Type == TypeQuad && group.IsConcealed { // Ankan
+			isEffectiveConcealedMeld = true
+		} else if group.Type == TypeTriplet && group.IsConcealed {
+			// If Ron, and this group was completed by agariHai, it does NOT count as concealed for Suuankou.
+			if !isTsumo && groupContainsTileID(group, agariHai.ID) {
+				// This Pung was completed by Ron, so it's not "concealed" in the Suuankou sense.
+			} else {
+				isEffectiveConcealedMeld = true
+			}
+		}
+		if isEffectiveConcealedMeld {
+			concealedPungKanCount++
+		}
+	}
+
+	if concealedPungKanCount == 4 {
+		// Additional check for Suuankou Tanki (pair wait) - if agariHai completes the pair.
+		// For single Yakuman, this distinction isn't needed, but for double, it is.
+		// For now, just 13 Han.
+		// if isTsumo { /* always valid */ } else { /* if Ron, agariHai must complete the pair */ }
+		// The logic above for Ron already handles the pung completion. If it's a Tanki wait,
+		// agariHai would be part of the pair, and all 4 pungs would be fully concealed before the win.
+		return true, "Suuankou", 13
+	}
+	return false, "", 0
+}
+
+// checkTsuuiisou (All Honors) - Yakuman (13 Han)
+func checkTsuuiisou(player *Player, allTiles []Tile) (bool, string, int) {
+	if len(allTiles) != 14 { return false, "", 0} // Ensure correct number of tiles for checks
+	for _, tile := range allTiles {
+		if !isHonor(tile) {
+			return false, "", 0 // Found a non-honor tile
+		}
+	}
+
+	// All tiles are honors. Now check for valid hand structure.
+	// Try standard decomposition first.
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if success && decomposition != nil {
+		// DecomposeWinningHand validates 4 groups + 1 pair.
+		return true, "Tsuuiisou", 13
+	}
+	
+	// If standard decomposition fails, check for Chiitoitsu structure.
+	if IsChiitoitsu(allTiles) { // Assumes IsChiitoitsu checks for 7 distinct pairs
+		return true, "Tsuuiisou", 13
+	}
+
+	return false, "", 0 // All honors but not a valid hand structure
+}
+
+// checkChinroutou (All Terminals) - Yakuman (13 Han)
+func checkChinroutou(player *Player, allTiles []Tile) (bool, string, int) {
+	if len(allTiles) != 14 { return false, "", 0} // Ensure correct number of tiles
+	for _, tile := range allTiles {
+		if !isTerminal(tile) { // Must be only terminals
+			return false, "", 0
+		}
+		// isTerminal implies not an honor, so no separate honor check needed if isTerminal is strict.
+	}
+
+	// All tiles are terminals. Check for valid hand structure.
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if success && decomposition != nil {
+		return true, "Chinroutou", 13
+	}
+	
+	if IsChiitoitsu(allTiles) { // 7 pairs of terminals
+		return true, "Chinroutou", 13
+	}
+	
+	return false, "", 0 // All terminals but not a valid hand structure
+}
+
+// groupContainsTileID checks if a tile ID exists in a list of DecomposedGroup tiles.
+// Local helper for Yaku checks, especially Sanankou and Pinfu.
+func groupContainsTileID(group DecomposedGroup, tileID int) bool {
+	for _, t := range group.Tiles {
+		if t.ID == tileID {
+			return true
+		}
+	}
+	return false
+}
+
+// sequencesAreEqual checks if two sequences (represented by their tiles) are identical.
+// Assumes tiles within each sequence are sorted.
+func sequencesAreEqual(seq1Tiles []Tile, seq2Tiles []Tile) bool {
+	if len(seq1Tiles) != 3 || len(seq2Tiles) != 3 {
+		return false // Sequences must have 3 tiles
+	}
+	for i := 0; i < 3; i++ {
+		// Compare by Suit and Value, ignoring ID and IsRed for structural equality
+		if seq1Tiles[i].Suit != seq2Tiles[i].Suit || seq1Tiles[i].Value != seq2Tiles[i].Value {
+			return false
+		}
+	}
+	return true
+}
 
 // isMenzenchin checks if the hand is considered concealed.
 // Ankan does NOT break concealment. Daiminkan/Shouminkan/Pon/Chi do.
@@ -449,6 +606,584 @@ func calculateTotalHan(results []YakuResult) int {
 
 // --- Individual Yaku Check Functions ---
 
+// checkTenhou (Blessing of Heaven) - Yakuman (13 Han)
+// Player must be dealer, win by Tsumo on their very first draw, with no intervening calls.
+func checkTenhou(player *Player, gs *GameState, isTsumo bool) (bool, string, int) {
+	// Conceptual checks (actual flag implementation is separate):
+	// 1. Player is dealer (East seat in the first round of the game is a common way to define initial dealer)
+	//    A more robust check would be `gs.Players[gs.DealerPlayerIndex] == player`.
+	//    For now, using SeatWind == "East" AND it's very early in the game.
+	// 2. Win by Tsumo.
+	// 3. Player's first draw of the game (gs.TurnNumber roughly indicates this, or a specific !player.HasDrawnThisGameYet flag).
+	// 4. No calls (Pon, Chi, open Kan) have occurred before this Tsumo.
+	
+	// Simplified conditions based on prompt:
+	// player.SeatWind == "East" (initial dealer)
+	// isTsumo
+	// gs.TurnNumber <= 1 (very early in the game, implies first draw for East)
+	// !gs.AnyCallMadeThisRound (conceptual flag for no interruptions)
+
+	// A more precise check for Tenhou would be:
+	// Player is dealer (e.g. gs.Players[gs.DealerIndex] == player)
+	// isTsumo
+	// It is the dealer's very first draw and discard cycle (e.g. gs.TurnNumber == 0 for dealer's draw phase)
+	// No melds (Ankan by dealer before their first discard might be an exception in some rules, but generally not for Tenhou)
+	
+	// Using the conceptual flags from the prompt:
+	// Let's assume a more direct way to check if it's the dealer's first action.
+	// For Tenhou, gs.TurnNumber is typically 0 when the dealer draws their first tile (14th tile).
+	// The win happens *on* this draw.
+	if player.SeatWind == "East" && isTsumo && gs.TurnNumber == 0 && !gs.AnyCallMadeThisRound {
+		// Further refinement could be ensuring player.Discards is empty, player.Melds is empty (or only Ankan if allowed by specific ruleset).
+		// For simplicity, the above conditions are a strong proxy.
+		return true, "Tenhou", 13
+	}
+	return false, "", 0
+}
+
+// checkChihou (Blessing of Earth) - Yakuman (13 Han)
+// Non-dealer wins by Tsumo on their very first draw, before their first discard, with no intervening calls.
+func checkChihou(player *Player, gs *GameState, isTsumo bool) (bool, string, int) {
+	// Conceptual checks:
+	// 1. Player is NOT dealer.
+	// 2. Win by Tsumo.
+	// 3. Player's first draw of the round, before their first discard (e.g., !player.HasMadeFirstDiscardThisRound).
+	// 4. No calls by anyone that interrupted the "first go-around" before this player's turn.
+	
+	// Using the conceptual flags from the prompt:
+	// player.SeatWind != "East" (not initial dealer - this is a simplification)
+	// isTsumo
+	// gs.IsFirstGoAround (conceptual: no player has completed their first turn, or no calls made)
+	// !player.HasMadeFirstDiscard (conceptual)
+	// !gs.AnyCallMadeThisRound (conceptual)
+
+	// A more precise check for Chihou:
+	// Player is NOT the dealer.
+	// isTsumo
+	// It is the player's very first draw of the round.
+	// No calls (Pon, Chi, open Kan) have occurred by anyone in the round prior to this Tsumo.
+	// (Ankan by another player before this player's turn might be allowed in some rules).
+	if player.SeatWind != "East" && isTsumo && gs.IsFirstGoAround && !player.HasMadeFirstDiscard && !gs.AnyCallMadeThisRound {
+		// Similar to Tenhou, ensure player.Discards is empty for this round, player.Melds is empty (or only Ankan if allowed).
+		return true, "Chihou", 13
+	}
+	return false, "", 0
+}
+
+// checkRenhou (Man by Human) - Yakuman (13 Han) or Mangan (depends on ruleset)
+// Player wins by Ron on a discard made during the first un-interrupted go-around of turns,
+// before their own first discard.
+func checkRenhou(player *Player, gs *GameState, isTsumo bool) (bool, string, int) {
+	// Conceptual checks:
+	// 1. Win by Ron (!isTsumo).
+	// 2. Player has not yet made their first discard in this round (!player.HasMadeFirstDiscardThisRound).
+	// 3. The discarder made their discard during the "first go-around" with no prior interrupting calls.
+	
+	// Using conceptual flags from the prompt:
+	// !isTsumo
+	// gs.IsFirstGoAround (conceptual)
+	// !player.HasMadeFirstDiscard (conceptual, for the winning player)
+	// !gs.AnyCallMadeThisRound (conceptual, for no interruptions before the Ron)
+	if !isTsumo && gs.IsFirstGoAround && !player.HasMadeFirstDiscard && !gs.AnyCallMadeThisRound {
+		// Renhou's value can vary (Mangan to Yakuman). We'll use 13 for consistency with prompt.
+		return true, "Renhou", 13 
+	}
+	return false, "", 0
+}
+
+
+// checkShousuushii (Little Four Winds) - Yakuman (13 Han)
+func checkShousuushii(player *Player, allTiles []Tile) (bool, string, int) {
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, "", 0
+	}
+
+	windPungKanCount := 0
+	windPairFound := false
+	foundWindValuesForPungKan := make(map[int]bool)
+	var foundWindValueForPair int = 0
+
+	for _, group := range decomposition {
+		if group.Type == TypeTriplet || group.Type == TypeQuad {
+			if len(group.Tiles) > 0 && group.Tiles[0].Suit == "Wind" {
+				windValue := group.Tiles[0].Value
+				if !foundWindValuesForPungKan[windValue] { // Count distinct wind pungs/kans
+					foundWindValuesForPungKan[windValue] = true
+					windPungKanCount++
+				} else { // Same wind type pung/kan twice - not Shousuushii
+					// This check might be too strict if player has e.g. two pungs of East wind.
+					// The core is 3 types of wind pungs and 1 type of wind pair.
+					// Let's refine: just count distinct pungs.
+				}
+			}
+		} else if group.Type == TypePair {
+			if len(group.Tiles) > 0 && group.Tiles[0].Suit == "Wind" {
+				if windPairFound { return false, "", 0 } // Multiple wind pairs or multiple pairs in general
+				foundWindValueForPair = group.Tiles[0].Value
+				windPairFound = true
+			}
+		}
+	}
+    // Recount distinct wind pungs/kans
+    distinctWindPungKanCount := len(foundWindValuesForPungKan)
+
+	if distinctWindPungKanCount == 3 && windPairFound {
+		// Ensure the pair's wind is the 4th distinct wind type
+		if _, isPairWindAlsoPung := foundWindValuesForPungKan[foundWindValueForPair]; !isPairWindAlsoPung {
+			return true, "Shousuushii", 13
+		}
+	}
+	return false, "", 0
+}
+
+// checkDaisuushii (Big Four Winds) - Yakuman (13 Han)
+func checkDaisuushii(player *Player, allTiles []Tile) (bool, string, int) {
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, "", 0
+	}
+
+	windPungKanCount := 0
+	foundWindValues := make(map[int]bool)
+
+	for _, group := range decomposition {
+		if group.Type == TypeTriplet || group.Type == TypeQuad {
+			if len(group.Tiles) > 0 && group.Tiles[0].Suit == "Wind" {
+				// No need to check for duplicates here, DecomposeWinningHand won't give two pungs of same tile.
+				// We just need to ensure all four distinct wind values are present as pungs/kans.
+				foundWindValues[group.Tiles[0].Value] = true
+				windPungKanCount++ // Counts total wind pungs/kans
+			}
+		}
+	}
+
+	if windPungKanCount == 4 && len(foundWindValues) == 4 {
+		return true, "Daisuushii", 13 // Some rules give Double Yakuman
+	}
+	return false, "", 0
+}
+
+// checkRyuuiisou (All Green) - Yakuman (13 Han)
+func checkRyuuiisou(player *Player, allTiles []Tile) (bool, string, int) {
+	if len(allTiles) != 14 { return false, "", 0}
+	
+	greenTiles := map[string]map[int]bool{
+		"Sou":    {2: true, 3: true, 4: true, 6: true, 8: true},
+		"Dragon": {2: true}, // Green Dragon (Value 2)
+	}
+
+	for _, tile := range allTiles {
+		suitMap, ok := greenTiles[tile.Suit]
+		if !ok { return false, "", 0 } // Not Sou or Dragon
+		if !suitMap[tile.Value] { return false, "", 0 } // Not a green number/dragon
+	}
+
+	// All tiles are green. Now check for valid hand structure.
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if success && decomposition != nil {
+		return true, "Ryuuiisou", 13
+	}
+	if IsChiitoitsu(allTiles) {
+		return true, "Ryuuiisou", 13
+	}
+	return false, "", 0
+}
+
+// checkChuurenPoutou (Nine Gates) - Yakuman (13 Han)
+func checkChuurenPoutou(isMenzen bool, allTiles []Tile) (bool, string, int) {
+	if !isMenzen {
+		return false, "", 0
+	}
+	if len(allTiles) != 14 { return false, "", 0 }
+
+	firstTileSuit := allTiles[0].Suit
+	if firstTileSuit == "Wind" || firstTileSuit == "Dragon" {
+		return false, "", 0 // Must be Man, Pin, or Sou
+	}
+
+	counts := make(map[int]int)
+	for _, tile := range allTiles {
+		if tile.Suit != firstTileSuit || isHonor(tile) { // Must all be same suit, no honors
+			return false, "", 0
+		}
+		counts[tile.Value]++
+	}
+
+	// Standard Chuuren: 1,1,1, 2,3,4,5,6,7,8, 9,9,9 (13 tiles) + 1 extra tile of the same suit
+	requiredCounts := map[int]int{1:3, 2:1, 3:1, 4:1, 5:1, 6:1, 7:1, 8:1, 9:3}
+	extraTileFound := false
+	
+	for val := 1; val <= 9; val++ {
+		if counts[val] < requiredCounts[val] {
+			return false, "", 0 // Missing a required tile
+		}
+		if counts[val] > requiredCounts[val] {
+			if counts[val] == requiredCounts[val]+1 && !extraTileFound {
+				extraTileFound = true // This is the 14th tile
+			} else {
+				return false, "", 0 // Too many of one tile, or multiple extra tiles
+			}
+		}
+	}
+	
+	if extraTileFound || (len(allTiles) == 13 && verifyChuurenBase(counts)) { 
+		// The verifyChuurenBase is more for a 13-tile check, here allTiles is 14.
+		// The loop already checks the 14-tile structure.
+		// The condition `extraTileFound` is sufficient if all `requiredCounts` are met.
+		
+		// Final check: sum of counts must be 14
+		sumCounts := 0
+		for _, c := range counts { sumCounts += c }
+		if sumCounts != 14 { return false, "", 0}
+
+		return true, "Chuuren Poutou", 13
+		// Junsei Chuuren (9-sided wait) is a double yakuman, not differentiated here.
+	}
+
+	return false, "", 0
+}
+
+// verifyChuurenBase (helper for a 13-tile "pure" nine gates pattern before the 14th tile)
+// Not strictly needed if checkChuurenPoutou always receives 14 tiles.
+func verifyChuurenBase(counts map[int]int) bool {
+    required := map[int]int{1:3, 2:1, 3:1, 4:1, 5:1, 6:1, 7:1, 8:1, 9:3}
+    for val, reqCount := range required {
+        if counts[val] != reqCount {
+            return false
+        }
+    }
+    return true
+}
+
+
+// checkSuukantsu (Four Kans) - Yakuman (13 Han)
+func checkSuukantsu(player *Player) (bool, string, int) {
+	kanCount := 0
+	for _, meld := range player.Melds {
+		if meld.Type == "Ankan" || meld.Type == "Daiminkan" || meld.Type == "Shouminkan" {
+			kanCount++
+		}
+	}
+	if kanCount == 4 {
+		// Hand must also have a pair to be complete.
+		// DecomposeWinningHand would be needed to confirm the pair if we passed allTiles.
+		// However, Suukantsu is typically identified by the 4 Kans alone, assuming the pair exists.
+		// The game rules often make 4 kans by one player a special case (e.g. abortive draw if not won on 4th kan's rinshan).
+		// For Yaku check, 4 Kans is sufficient.
+		return true, "Suukantsu", 13
+	}
+	return false, "", 0
+}
+
+
+// checkDaisangen (Big Three Dragons) - Yakuman (13 Han)
+func checkDaisangen(player *Player, allTiles []Tile) (bool, string, int) {
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil {
+		return false, "", 0
+	}
+
+	dragonPungKan := map[int]bool{1: false, 2: false, 3: false} // White, Green, Red
+
+	for _, group := range decomposition {
+		if group.Type == TypeTriplet || group.Type == TypeQuad {
+			if len(group.Tiles) > 0 && group.Tiles[0].Suit == "Dragon" {
+				dragonPungKan[group.Tiles[0].Value] = true
+			}
+		}
+	}
+
+	if dragonPungKan[1] && dragonPungKan[2] && dragonPungKan[3] {
+		return true, "Daisangen", 13
+	}
+	return false, "", 0
+}
+
+// checkSuuankou (Four Concealed Pungs/Kans) - Yakuman (13 Han)
+// Note: Suuankou Tanki (double Yakuman on pair wait) is not differentiated here.
+func checkSuuankou(player *Player, agariHai Tile, isTsumo bool, isMenzen bool, allTiles []Tile) (bool, string, int) {
+	if !isMenzen {
+		return false, "", 0
+	}
+
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil {
+		// Suuankou might not always decompose cleanly if it's a Chiitoitsu-like wait for the last pung.
+		// However, standard Suuankou is 4 pungs + 1 pair.
+		// If DecomposeWinningHand fails, it's unlikely to be standard Suuankou.
+		return false, "", 0
+	}
+
+	concealedPungKanCount := 0
+	for _, group := range decomposition {
+		if group.Type == TypeQuad && group.IsConcealed { // Ankan
+			concealedPungKanCount++
+		} else if group.Type == TypeTriplet && group.IsConcealed {
+			// If Ron, and this group was completed by agariHai, it does NOT count as concealed for Suuankou.
+			if !isTsumo && groupContainsTileID(group, agariHai.ID) {
+				// This Pung was completed by Ron, so it's not "concealed" in the Suuankou sense.
+			} else {
+				concealedPungKanCount++
+			}
+		}
+	}
+
+	if concealedPungKanCount == 4 {
+		return true, "Suuankou", 13
+	}
+	return false, "", 0
+}
+
+// checkTsuuiisou (All Honors) - Yakuman (13 Han)
+func checkTsuuiisou(player *Player, allTiles []Tile) (bool, string, int) {
+	if len(allTiles) == 0 { return false, "", 0} // Should not happen with a winning hand
+	for _, tile := range allTiles {
+		if !isHonor(tile) {
+			return false, "", 0 // Found a non-honor tile
+		}
+	}
+
+	// All tiles are honors. Now check for valid hand structure (standard or Chiitoitsu).
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if success && decomposition != nil {
+		// Check if it's a standard 4 melds + 1 pair structure
+		// DecomposeWinningHand already validates the 4 groups + 1 pair structure.
+		return true, "Tsuuiisou", 13
+	}
+	
+	// If not standard, check for Chiitoitsu (7 pairs of honors)
+	// Re-check allTiles for Chiitoitsu structure, as DecomposeWinningHand might fail for it.
+	if IsChiitoitsu(allTiles) {
+		return true, "Tsuuiisou", 13
+	}
+
+	return false, "", 0 // All honors but not a valid hand structure
+}
+
+// checkChinroutou (All Terminals) - Yakuman (13 Han)
+func checkChinroutou(player *Player, allTiles []Tile) (bool, string, int) {
+	if len(allTiles) == 0 { return false, "", 0}
+	for _, tile := range allTiles {
+		if !isTerminal(tile) { // Must be only terminals
+			return false, "", 0
+		}
+		// Implicitly, if it's a terminal, it's not an honor.
+		// No need for an explicit isHonor check if isTerminal is strict.
+	}
+
+	// All tiles are terminals. Check for valid hand structure.
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if success && decomposition != nil {
+		return true, "Chinroutou", 13
+	}
+	
+	if IsChiitoitsu(allTiles) { // 7 pairs of terminals
+		return true, "Chinroutou", 13
+	}
+	
+	return false, "", 0 // All terminals but not a valid hand structure
+}
+
+
+// groupContainsTileID checks if a tile ID exists in a list of DecomposedGroup tiles.
+// Local helper for Yaku checks.
+func groupContainsTileID(group DecomposedGroup, tileID int) bool {
+	for _, t := range group.Tiles {
+		if t.ID == tileID {
+			return true
+		}
+	}
+	return false
+}
+
+// sequencesAreEqual checks if two sequences (represented by their tiles) are identical.
+// Assumes tiles within each sequence are sorted.
+func sequencesAreEqual(seq1Tiles []Tile, seq2Tiles []Tile) bool {
+	if len(seq1Tiles) != 3 || len(seq2Tiles) != 3 {
+		return false // Sequences must have 3 tiles
+	}
+	for i := 0; i < 3; i++ {
+		// Compare by Suit and Value.
+		if seq1Tiles[i].Suit != seq2Tiles[i].Suit || seq1Tiles[i].Value != seq2Tiles[i].Value {
+			return false
+		}
+	}
+	return true
+}
+
+// checkPinfu (Peaceful Hand) - 1 Han
+func checkPinfu(player *Player, agariHai Tile, isMenzen bool, allTiles []Tile, gs *GameState) (bool, int) {
+	if !isMenzen {
+		return false, 0
+	}
+
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, 0
+	}
+
+	sequenceCount := 0
+	var pairGroup DecomposedGroup
+	foundPairInDecomp := false
+
+	for _, group := range decomposition {
+		if group.Type == TypeSequence {
+			sequenceCount++
+		} else if group.Type == TypePair {
+			if foundPairInDecomp { return false, 0 }
+			pairGroup = group
+			foundPairInDecomp = true
+		} else {
+			return false, 0 // Must be only sequences and one pair
+		}
+	}
+	if sequenceCount != 4 || !foundPairInDecomp {
+		return false, 0
+	}
+
+	if len(pairGroup.Tiles) == 0 { return false, 0 }
+	pairTile := pairGroup.Tiles[0]
+	if isYakuhai(pairTile, player, gs) {
+		return false, 0
+	}
+
+	ryanmenWaitFound := false
+	for _, group := range decomposition {
+		if group.Type == TypeSequence && groupContainsTileID(group, agariHai.ID) {
+			t1, t2, t3 := group.Tiles[0], group.Tiles[1], group.Tiles[2]
+			
+			// Use Suit and Value for comparing agariHai with sequence tiles
+			isAgariHaiT1 := (agariHai.Suit == t1.Suit && agariHai.Value == t1.Value)
+			isAgariHaiT2 := (agariHai.Suit == t2.Suit && agariHai.Value == t2.Value)
+			isAgariHaiT3 := (agariHai.Suit == t3.Suit && agariHai.Value == t3.Value)
+
+			if isAgariHaiT2 { // Kanchan wait (e.g., 4-s-6 waiting on 5-s)
+				ryanmenWaitFound = false; break
+			}
+			// Penchan waits: 1-2 waiting on 3 (agariHai is t3, value 3) or 7-8 waiting on 9 (agariHai is t3, value 9)
+			// OR 1-2-3 waiting on 1 (agariHai is t1, value 1) or 7-8-9 waiting on 7 (agariHai is t1, value 7)
+			if (isAgariHaiT3 && t3.Value == 3 && t2.Value == 2 && t1.Value == 1) || // 1-2 completed by 3
+			   (isAgariHaiT1 && t1.Value == 7 && t2.Value == 8 && t3.Value == 9) {  // 8-9 completed by 7
+				ryanmenWaitFound = false; break
+			}
+			// More general Penchan: if agariHai is t1 and t1.Value == 1
+			if isAgariHaiT1 && t1.Value == 1 {
+				ryanmenWaitFound = false; break;
+			}
+			// if agariHai is t3 and t3.Value == 9
+			if isAgariHaiT3 && t3.Value == 9 {
+				ryanmenWaitFound = false; break;
+			}
+
+			if isAgariHaiT1 || isAgariHaiT3 { // If not Kanchan or specific Penchans, it's Ryanmen
+				ryanmenWaitFound = true; break
+			}
+		}
+	}
+
+	if !ryanmenWaitFound {
+		return false, 0
+	}
+	return true, 1
+}
+
+// checkToitoi (All Pungs/Kans) - 2 Han
+func checkToitoi(player *Player, allTiles []Tile) (bool, int) {
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, 0
+	}
+
+	pungKanCount := 0
+	pairCount := 0
+	for _, group := range decomposition {
+		if group.Type == TypeTriplet || group.Type == TypeQuad {
+			pungKanCount++
+		} else if group.Type == TypePair {
+			pairCount++
+		} else { // Found a sequence
+			return false, 0
+		}
+	}
+
+	if pungKanCount == 4 && pairCount == 1 {
+		return true, 2
+	}
+	return false, 0
+}
+
+// checkIipeikou (One Pure Double Sequence) - 1 Han
+func checkIipeikou(player *Player, isMenzen bool, allTiles []Tile) (bool, int) {
+	if !isMenzen {
+		return false, 0
+	}
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, 0
+	}
+
+	sequences := []DecomposedGroup{}
+	for _, group := range decomposition {
+		if group.Type == TypeSequence {
+			sequences = append(sequences, group)
+		}
+	}
+
+	if len(sequences) < 2 {
+		return false, 0
+	}
+
+	identicalPairCount := 0
+	for i := 0; i < len(sequences); i++ {
+		for j := i + 1; j < len(sequences); j++ {
+			if sequencesAreEqual(sequences[i].Tiles, sequences[j].Tiles) {
+				identicalPairCount++
+			}
+		}
+	}
+
+	if identicalPairCount == 1 { // Exactly one pair of identical sequences
+		return true, 1
+	}
+	// If identicalPairCount > 1, it could be Ryanpeikou (not handled here) or just multiple identical sequences if > 2.
+	return false, 0
+}
+
+// checkSanankou (Three Concealed Pungs/Kans) - 2 Han
+func checkSanankou(player *Player, agariHai Tile, isTsumo bool, allTiles []Tile) (bool, int) {
+	// isMenzen is not directly a Sanankou requirement, but concealed nature of pungs is.
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, 0
+	}
+
+	sanankouCounter := 0
+	for _, group := range decomposition {
+		isEffectiveConcealedMeld := false
+		if group.Type == TypeTriplet && group.IsConcealed {
+			if !isTsumo && groupContainsTileID(group, agariHai.ID) {
+				// This triplet was completed by Ron, so it's not counted as concealed for Sanankou.
+				isEffectiveConcealedMeld = false
+			} else {
+				isEffectiveConcealedMeld = true
+			}
+		} else if group.Type == TypeQuad && group.IsConcealed { // Ankan
+			isEffectiveConcealedMeld = true // Ankans always count as concealed sets.
+		}
+
+		if isEffectiveConcealedMeld {
+			sanankouCounter++
+		}
+	}
+
+	if sanankouCounter == 3 {
+		return true, 2
+	}
+	return false, 0
+}
+
+
 // --- Yakuman ---
 
 func checkKokushiMusou(allTiles []Tile, agariHai Tile) (bool, string, int) {
@@ -491,24 +1226,29 @@ func checkMenzenTsumo(isTsumo bool, isMenzen bool) (bool, int) {
 	return false, 0
 }
 
-func checkPinfu(player *Player, agariHai Tile, isMenzen bool, allTiles []Tile) (bool, int) {
-	if !isMenzen {
-		return false, 0
+// The checkPinfu placeholder is already removed and replaced by the full implementation
+// in the previous step (where all new Yaku functions were defined).
+// This SEARCH block is for the *old* placeholder which should no longer exist if prior step was complete.
+// Assuming the prior step correctly placed the new checkPinfu function definition.
+
+// checkRinshanKaihou (Win on a replacement tile after a Kan) - 1 Han
+func checkRinshanKaihou(gs *GameState, isTsumo bool) (bool, int) {
+	// Assumes gs.IsRinshanWin is true if the win was on a tile drawn after a Kan.
+	// Must be a Tsumo win.
+	if isTsumo && gs.IsRinshanWin {
+		return true, 1
 	}
-	// Requires:
-	// 1. Menzenchin (checked)
-	// 2. 4 Sequences (Chi) + 1 Pair
-	// 3. Pair is NOT Yakuhai (Dragons, Seat Wind, Prevalent Wind)
-	// 4. Wait must be Ryanmen (two-sided sequence wait, e.g., waiting on 3 or 6 for a 4-5 shape)
+	return false, 0
+}
 
-	// TODO: This requires robust hand decomposition and wait analysis. Very complex.
-	// Placeholder: Return false for now.
-	// --- Rough steps ---
-	// Decompose hand into 4 groups + 1 pair. Check all groups are sequences.
-	// Find the pair. Check if isYakuhai(pairTile, player, gs).
-	// Determine the wait type based on hand *before* agariHai. Check if it was Ryanmen.
-
-	return false, 0 // Placeholder
+// checkChankan (Robbing a Kan) - 1 Han
+func checkChankan(gs *GameState) (bool, int) {
+	// Assumes gs.IsChankanOpportunity is true if another player just declared Shouminkan
+	// and this player can Ron that tile.
+	if gs.IsChankanOpportunity {
+		return true, 1
+	}
+	return false, 0
 }
 
 func checkTanyao(allTiles []Tile) (bool, int) {
@@ -559,16 +1299,16 @@ func checkYakuhai(player *Player, gs *GameState, allTiles []Tile) ([]YakuResult,
 
 func checkHaiteiHoutei(gs *GameState, isTsumo bool) (bool, string, int) {
 	// Haitei Raoyue (Last Tile Tsumo)
+	// Assumes gs.Wall being empty is checked *after* the player draws for Tsumo.
 	if isTsumo && len(gs.Wall) == 0 {
 		return true, "Haitei Raoyue", 1
 	}
 	// Houtei Raoyui (Win on Last Discard)
-	// Need to know if the discard causing the Ron was the very last discard of the game *after* the last tile was drawn.
-	// TODO: Requires tracking if the wall was exhausted *before* the final discard.
-	// if !isTsumo && isLastDiscardOfTheRound {
-	//     return true, "Houtei Raoyui", 1
-	// }
-	return false, "", 0 // Placeholder for Houtei
+	// Assumes gs.IsHouteiDiscard is true if the current Ron is on the very last discard of the game.
+	if !isTsumo && gs.IsHouteiDiscard {
+		return true, "Houtei Raoyui", 1
+	}
+	return false, "", 0
 }
 
 // --- 2 Han ---
@@ -585,41 +1325,7 @@ func checkChiitoitsu(player *Player, allTiles []Tile, isMenzen bool) (bool, int)
 	return false, 0
 }
 
-func checkToitoi(player *Player, allTiles []Tile) (bool, int) {
-	// Hand must be 4 Pungs/Kans + 1 Pair.
-	// Cannot coexist with Chiitoitsu. Cannot contain sequences.
-
-	// TODO: Requires hand decomposition.
-	// --- Rough steps ---
-	// Decompose hand. Check if all 4 groups are Pungs or Kans.
-	// If yes, return true, 2 Han.
-
-	// Simple check (less reliable): Count number tiles. If < 3*4 = 12, cannot be 4 sequences.
-	// Count pairs: Should have exactly one pair type appearing twice, others 3 or 4 times.
-	counts := CountTiles(allTiles)
-	numTripletsOrQuads := 0
-	numPairs := 0
-
-	for _, count := range counts {
-		if count == 2 {
-			numPairs++
-		} else if count == 3 || count == 4 {
-			numTripletsOrQuads++
-		} else {
-			return false, 0 // Count isn't 2, 3, or 4 - invalid for Toitoi
-		}
-
-	}
-
-	// If hand is 4 Pungs/Kans and 1 Pair
-	if numTripletsOrQuads == 4 && numPairs == 1 {
-		// Extra check: If it contains sequences, it's not Toitoi (this check is weak)
-		// A proper decomposition is needed. Assume for now simple count is enough.
-		return true, 2
-	}
-
-	return false, 0 // Placeholder
-}
+// The checkToitoi placeholder is already removed and replaced by the full implementation.
 
 func checkShousangen(player *Player, allTiles []Tile) (bool, int) {
 	// Two Pungs/Kans of Dragons + Pair of the third Dragon.
@@ -666,19 +1372,107 @@ func checkHonroutou(allTiles []Tile) (bool, int) {
 
 // --- 3+ Han ---
 
-func checkIipeikou(player *Player, isMenzen bool, allTiles []Tile) (bool, int) {
+// The checkIipeikou placeholder is already removed and replaced by the full implementation.
+
+// checkRyanpeikou (Two Pure Double Sequences) - 3 Han
+func checkRyanpeikou(player *Player, isMenzen bool, allTiles []Tile) (bool, int) {
 	if !isMenzen {
 		return false, 0
 	}
-	// Two identical sequences. E.g., 2p 3p 4p + 2p 3p 4p.
-	// Cannot coexist with Chiitoitsu.
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, 0
+	}
 
-	// TODO: Requires hand decomposition.
-	// --- Rough steps ---
-	// Decompose hand. Check if exactly two of the groups are identical sequences.
+	sequences := []DecomposedGroup{}
+	pairCount := 0
+	for _, group := range decomposition {
+		if group.Type == TypeSequence {
+			sequences = append(sequences, group)
+		} else if group.Type == TypePair {
+			pairCount++
+		} else { // Contains Pung/Kan, not valid for Ryanpeikou
+			return false, 0
+		}
+	}
 
-	return false, 0 // Placeholder
+	if len(sequences) != 4 || pairCount != 1 { // Must be 4 sequences and 1 pair
+		return false, 0
+	}
+
+	// Check for two pairs of identical sequences
+	// Example: S1, S2, S3, S4. We need S1=S2 and S3=S4, and S1 != S3.
+	// Or S1=S3 and S2=S4, and S1 != S2 etc.
+	// A simpler approach: count occurrences of each unique sequence type.
+	// We need two types of sequences, each appearing twice.
+	
+	if len(sequences) != 4 { return false, 0 } // Should be redundant due to above check
+
+    // Sort sequences by their tile composition to make comparison easier for pairing up.
+    // This isn't strictly necessary if using a map key, but good for deterministic logic.
+    sort.Slice(sequences, func(i, j int) bool {
+        for k := 0; k < 3; k++ {
+            if sequences[i].Tiles[k].Suit != sequences[j].Tiles[k].Suit {
+                return sequences[i].Tiles[k].Suit < sequences[j].Tiles[k].Suit
+            }
+            if sequences[i].Tiles[k].Value != sequences[j].Tiles[k].Value {
+                return sequences[i].Tiles[k].Value < sequences[j].Tiles[k].Value
+            }
+        }
+        return false
+    })
+
+    // Check for AABB pattern
+    // (S0 == S1 && S2 == S3 && S0 != S2)
+    cond1 := sequencesAreEqual(sequences[0].Tiles, sequences[1].Tiles) &&
+             sequencesAreEqual(sequences[2].Tiles, sequences[3].Tiles) &&
+             !sequencesAreEqual(sequences[0].Tiles, sequences[2].Tiles) // Ensure the two pairs are different
+
+    // Check for ABAB pattern (after sort, this would become AABB if S0=S2, S1=S3)
+    // This case is covered by the sort and then AABB check if S0,S1,S2,S3 are truly A,B,A,B
+    // After sort, it becomes A,A,B,B.
+
+    // Check for ABBA pattern (after sort, this would become AABB if S0=S3, S1=S2)
+    // This case is also covered by sort and AABB.
+
+	if cond1 {
+		return true, 3
+	}
+	
+	return false, 0
 }
+
+
+// checkJunchan (Junchan Taiyao or "Terminals in All Sets") - 3 Han (Menzen), 2 Han (Open)
+func checkJunchan(player *Player, isMenzen bool, allTiles []Tile) (bool, int) {
+	decomposition, success := DecomposeWinningHand(player, allTiles)
+	if !success || decomposition == nil || len(decomposition) != 5 {
+		return false, 0
+	}
+
+	for _, group := range decomposition {
+		hasTerminalInGroup := false
+		for _, tile := range group.Tiles {
+			if isHonor(tile) {
+				return false, 0 // No honor tiles allowed for Junchan
+			}
+			if isTerminal(tile) {
+				hasTerminalInGroup = true
+			}
+		}
+		if !hasTerminalInGroup {
+			return false, 0 // This group does not contain a terminal
+		}
+	}
+
+	// All groups (4 melds + 1 pair) contain at least one terminal, and no honor tiles were found.
+	han := 2
+	if isMenzen {
+		han = 3
+	}
+	return true, han
+}
+
 
 func checkHonitsu(allTiles []Tile, isMenzen bool) (bool, int) {
 	// Hand uses only tiles from ONE suit (Man, Pin, or Sou) plus any Honor tiles.

@@ -271,6 +271,9 @@ func DiscardTile(gs *GameState, player *Player, tileIndex int) (Tile, bool) {
 
 // HandlePonAction processes the Pon action, updates player state.
 func HandlePonAction(gs *GameState, player *Player, discardedTile Tile) {
+	gs.AnyCallMadeThisRound = true
+	gs.IsFirstGoAround = false // Any call ends the "first go around"
+
 	meldTiles := []Tile{discardedTile} // Start with the called tile
 	indicesToRemove := []int{}
 	foundCount := 0
@@ -325,6 +328,9 @@ func HandlePonAction(gs *GameState, player *Player, discardedTile Tile) {
 // HandleChiAction processes the Chi action, updates player state.
 // `sequence` includes the 3 tiles: 2 from hand + discardedTile.
 func HandleChiAction(gs *GameState, player *Player, discardedTile Tile, sequence []Tile) {
+	gs.AnyCallMadeThisRound = true
+	gs.IsFirstGoAround = false // Any call ends the "first go around"
+
 	indicesToRemove := []int{}
 	foundCount := 0
 	tilesFromHand := []Tile{} // Keep track of the actual tiles removed from hand
@@ -399,6 +405,10 @@ func HandleChiAction(gs *GameState, player *Player, discardedTile Tile, sequence
 // HandleKanAction processes Kan declarations (all types).
 // Handles tile removal, meld creation, Rinshan draw, and triggers next discard.
 func HandleKanAction(gs *GameState, player *Player, targetTile Tile, kanType string) {
+	// For any type of Kan, it signifies an interruption or significant game state change.
+	gs.AnyCallMadeThisRound = true
+	gs.IsFirstGoAround = false // Any Kan call ends the "first go around"
+
 	meldTiles := []Tile{}
 	indicesToRemove := []int{} // Indices in the player's hand to remove
 	newMeld := Meld{Type: kanType}
@@ -494,26 +504,23 @@ func HandleKanAction(gs *GameState, player *Player, targetTile Tile, kanType str
 		}
 
 		// --- Chankan Check (Robbing the Kan) ---
+		gs.IsChankanOpportunity = true // Set Chankan flag before checking Ron
 		canBeRobbed := false
 		robbingPlayer := (*Player)(nil)
+
 		for i, otherPlayer := range gs.Players {
 			if i == gs.GetPlayerIndex(player) {
 				continue
 			}
-
-			// Check if another player can Ron on the tile *being added* (tileToAdd)
-			// Need to consider the state *as if* the Kan hasn't fully happened yet.
-			// Pass tileToAdd as the winning tile. The 'player' state still has the Pon.
-			if CanDeclareRon(otherPlayer, tileToAdd, gs) {
-				// Check for Yaku. Chankan itself is a Yaku (1 Han).
-				// IdentifyYaku called by CanDeclareRon should find Chankan if applicable.
-				// TODO: Ensure IdentifyYaku has logic for Chankan situation.
+			// Pass tileToAdd, the tile being added to complete the Shouminkan
+			if CanDeclareRon(otherPlayer, tileToAdd, gs) { 
 				canBeRobbed = true
-				robbingPlayer = otherPlayer // Assume first one robs for now
+				robbingPlayer = otherPlayer
 				break
 			}
 		}
 
+		chankanWinOccurred := false
 		if canBeRobbed {
 			isHumanRobber := gs.GetPlayerIndex(robbingPlayer) == 0
 			fmt.Printf("--- Player %s (%s) Opportunity ---\n", robbingPlayer.Name, "Chankan")
@@ -526,18 +533,20 @@ func HandleKanAction(gs *GameState, player *Player, targetTile Tile, kanType str
 
 			if chankanConfirm {
 				fmt.Printf("\n!!! CHANKAN (Robbing the Kan) by %s on %s !!!\n", robbingPlayer.Name, tileToAdd.Name)
-				// The 'discarder' for Chankan is the player attempting the Shouminkan.
-				gs.LastDiscard = &tileToAdd                       // Treat the robbed tile as the discard for scoring/state? Rules vary. Set it for HandleWin.
-				gs.CurrentPlayerIndex = gs.GetPlayerIndex(player) // Set index to Kan declarer for discarder payment logic
-				HandleWin(gs, robbingPlayer, tileToAdd, false)    // Ron win for robbing player
-				// Game potentially ends, HandleWin sets phase.
-				return // Stop Kan processing, win takes precedence.
+				gs.LastDiscard = &tileToAdd // The robbed tile is the winning tile
+				// CurrentPlayerIndex is the player attempting Kan, who "discarded" for Chankan.
+				HandleWin(gs, robbingPlayer, tileToAdd, false) 
+				chankanWinOccurred = true
 			} else {
 				fmt.Printf("%s declined Chankan.\n", robbingPlayer.Name)
-				// Robbing player becomes Furiten? Check rules.
+				// TODO: Robbing player becomes Furiten for missing this Chankan? (Rules vary)
 			}
 		}
+		gs.IsChankanOpportunity = false // Reset Chankan flag after checks
 
+		if chankanWinOccurred {
+			return // Stop Kan processing, win takes precedence.
+		}
 		// --- Complete Shouminkan (if not robbed) ---
 		// TODO: Check Riichi wait change rules if player is in Riichi
 		// Update the existing Pon meld in place
@@ -594,15 +603,18 @@ func HandleKanAction(gs *GameState, player *Player, targetTile Tile, kanType str
 		// DisplayPlayerState(player) // Displayed again before discard
 
 		// 2. Check for Tsumo on Rinshan (Rinshan Kaihou Yaku)
-		// CanDeclareTsumo now checks for Yaku, Rinshan Kaihou should be added in yaku.go
-		if CanDeclareTsumo(player, gs) {
-			// IdentifyYaku needs to know it's a Rinshan win context if needed
-			// TODO: Pass Rinshan context to IdentifyYaku if it affects other Yaku checks
-			fmt.Printf("\n!!! TSUMO (Rinshan Kaihou potentially) by %s !!!\n", player.Name)
+		gs.IsRinshanWin = true // Set Rinshan flag before Tsumo check
+		canTsumoOnRinshan := CanDeclareTsumo(player, gs)
+		// Reset flag immediately after the check, before any further action (like discard).
+		// gs.IsRinshanWin = false; // Moved down
+
+		if canTsumoOnRinshan {
+			fmt.Printf("\n!!! TSUMO (Rinshan Kaihou potentially) by %s on %s !!!\n", player.Name, rinshanTile.Name)
 			HandleWin(gs, player, rinshanTile, true) // true = Tsumo
-			// HandleWin should set GamePhase to RoundEnd/GameEnd
+			gs.IsRinshanWin = false // Reset after win processing
 			return // End Kan handling
 		}
+		gs.IsRinshanWin = false // Reset if no Tsumo, before proceeding to discard
 
 		// 3. Player must discard again after Kan + Rinshan draw
 		// Turn remains with the Kan caller. Prompt for discard.
@@ -610,7 +622,7 @@ func HandleKanAction(gs *GameState, player *Player, targetTile Tile, kanType str
 
 	} else {
 		// Should not happen with current Kan types, but if a Kan existed that didn't need Rinshan:
-		PromptDiscard(gs, player)
+		PromptDiscard(gs, player) // This path likely won't set IsRinshanWin
 	}
 }
 

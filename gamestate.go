@@ -52,7 +52,18 @@ func NewGameState(playerNames []string) *GameState {
 		GamePhase:          PhaseDealing,
 		InputReader:        bufio.NewReader(os.Stdin),
 		LastDiscard:        nil, // Explicitly nil at start
+		// Initialize new flags for Tenhou/Chihou/Renhou
+		AnyCallMadeThisRound: false,
+		IsFirstGoAround:      true, // Starts as true at the beginning of a round
+		// IsChankanOpportunity, IsRinshanWin, IsHouteiDiscard are already initialized to false by Go's default bool.
 	}
+
+	// Initialize new player flags
+	for _, p := range gs.Players {
+		p.HasMadeFirstDiscardThisRound = false
+		p.HasDrawnFirstTileThisRound = false
+	}
+
 	gs.RevealInitialDoraIndicator()
 	return gs
 }
