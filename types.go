@@ -46,6 +46,8 @@ type Player struct {
 	IsIppatsu  bool   // Eligible for Ippatsu (true between Riichi and next draw/call/own Kan)
 	IsFuriten  bool   // Cannot Ron
 	// Add other state as needed (e.g., Menzenchin status - can be derived)
+	HasMadeFirstDiscardThisRound bool // True if player has made their first discard in the current round
+	HasDrawnFirstTileThisRound   bool // True if player has drawn their first tile in the current round
 }
 
 // RiichiOption stores details about a possible Riichi declaration
@@ -72,6 +74,13 @@ type GameState struct {
 	LastDiscard        *Tile         // Reference to the very last discarded tile by any player
 	GamePhase          string        // e.g., PhaseDealing, PhasePlayerTurn, PhaseRoundEnd
 	InputReader        *bufio.Reader // For reading user input
+
+	// Flags for specific Yaku conditions
+	IsChankanOpportunity bool // True if a player has just declared Shouminkan and the tile is available for Ron
+	IsRinshanWin         bool // True if the current Tsumo check is for a Rinshan tile draw
+	IsHouteiDiscard      bool // True if the current discard is the one immediately after the last wall tile was drawn
+	AnyCallMadeThisRound bool // True if any player has made a Chi, Pon, Daiminkan, or Shouminkan this round
+	IsFirstGoAround      bool // True until a player completes their first discard OR a call is made
 }
 
 // --- Sorting Tiles ---

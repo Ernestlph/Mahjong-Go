@@ -36,22 +36,40 @@ func main() {
 		currentPlayer := gameState.Players[gameState.CurrentPlayerIndex]
 		isHumanPlayer := gameState.CurrentPlayerIndex == 0 // Assuming player 0 is human
 
+		// Reset flags at the start of each player's turn
+		gameState.IsChankanOpportunity = false
+		gameState.IsRinshanWin = false 
+		// IsHouteiDiscard is set specifically when the last tile is drawn and then discarded.
+		// It should be reset if the round continues beyond that specific discard without a win.
+		// For safety, reset it here. If it's a Houtei discard turn, it will be set to true later.
+		gameState.IsHouteiDiscard = false
+
+
 		DisplayGameState(gameState) // Show state at start of turn
 
 		// --- Draw Phase ---
 		fmt.Printf("\n--- %s's Turn (%s Wind) ---\n", currentPlayer.Name, currentPlayer.SeatWind)
-		drawnTile, wallEmpty := gameState.DrawTile()
-		if wallEmpty {
+		
+		// Check for Haitei condition (last tile from wall)
+		isHaiteiDraw := len(gameState.Wall) == 1 // If 1 tile left, this draw will be Haitei
+		
+		drawnTile, wallNowEmpty := gameState.DrawTile() // wallNowEmpty is true if wall was emptied by this draw
+		currentPlayer.HasDrawnFirstTileThisRound = true // Player has drawn their first tile
+
+		if wallNowEmpty && !isHaiteiDraw { // Wall became empty unexpectedly (e.g. error in logic)
 			fmt.Println("\nWall is empty! Round ends in a draw (Ryuukyoku).")
-			// *** Handle Ryuukyoku scoring/dealer retention ***
-			gameState.GamePhase = PhaseRoundEnd // Simple end for now
+			gameState.GamePhase = PhaseRoundEnd 
 			break
 		}
-		fmt.Printf("%s draws: %s\n", currentPlayer.Name, drawnTile.Name) // Show drawn tile name
+		fmt.Printf("%s draws: %s\n", currentPlayer.Name, drawnTile.Name) 
+		if isHaiteiDraw {
+			fmt.Println("This is the last tile from the wall (Haitei).")
+		}
+
+
 		// Show hand only *after* draw for human player
 		if isHumanPlayer {
-			// DisplayPlayerState shows hand AFTER draw, before action/discard
-			// DisplayPlayerState(currentPlayer)
+			// DisplayPlayerState(currentPlayer) // Called later before discard choice
 		}
 
 		// --- Action Phase (Tsumo, Kan on Draw) ---
@@ -196,26 +214,59 @@ func main() {
 
 		// Perform the discard *only if* it wasn't handled by Riichi declaration
 		if !riichiDeclaredSuccessfully && discardIndex != -1 {
+			// If this discard is after the Haitei tile was drawn, it's a Houtei discard.
+			if isHaiteiDraw { // isHaiteiDraw means the drawnTile was the last one.
+				gameState.IsHouteiDiscard = true
+				fmt.Println("This discard is Houtei (last discard of the game).")
+			}
+
 			// DiscardTile handles calls, Furiten update, and turn advancement
 			_, gameShouldEnd := DiscardTile(gameState, currentPlayer, discardIndex)
+			currentPlayer.HasMadeFirstDiscardThisRound = true
+
+			// Update IsFirstGoAround after the first discard of each player in the initial set of turns
+			// A simple proxy: if TurnNumber (which increments in DiscardTile) reaches number of players -1,
+			// it means all players have had one turn (0, 1, 2, 3 for 4 players).
+			// This should happen *after* the current player's discard is fully processed by DiscardTile.
+			// TurnNumber is 0-indexed for the round's turns.
+			// If TurnNumber is 3 (4th discard of the round), first go-around is done.
+			if gameState.IsFirstGoAround && gameState.TurnNumber >= (len(gameState.Players)-1) {
+				// This logic might be too simple if calls interrupt the first go-around.
+				// AnyCallMadeThisRound will also set IsFirstGoAround to false more reliably.
+				// However, for a natural first go-around without calls:
+				// gameState.IsFirstGoAround = false; // This is one way to mark end of natural first round.
+				// Let's rely on AnyCallMadeThisRound and a more explicit check for Renhou/Chihou context.
+				// The Yaku checks use IsFirstGoAround, which is primarily falsified by calls.
+				// The HasMadeFirstDiscardThisRound flag on player is more direct for Renhou/Chihou.
+			}
+			
 			if gameShouldEnd {
-				// Ron occurred on the normal discard
+				// Ron occurred on the normal discard (could be Houtei)
 				break // End the main loop
 			}
 		} else if !riichiDeclaredSuccessfully && discardIndex == -1 {
 			fmt.Println("Error: No valid discard index determined.")
-			// Handle error state? Maybe end round as draw?
 			gameState.GamePhase = PhaseRoundEnd
 			break
 		}
 
-		// Check for end conditions again (e.g., wall empty after calls/discard)
-		if len(gameState.Wall) == 0 && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
-			fmt.Println("\nWall is empty! Round ends in a draw (Ryuukyoku).")
-			// *** Handle Ryuukyoku scoring/dealer retention ***
-			gameState.GamePhase = PhaseRoundEnd // Simple end for now
+		// Check for end conditions again
+		// If it was a Haitei draw and no win occurred on Tsumo or subsequent Houtei discard, it's Ryuukyoku.
+		if isHaiteiDraw && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
+			// No one won on Haitei Tsumo or Houtei Ron
+			fmt.Println("\nLast tile drawn and discarded with no win. Round ends in a draw (Ryuukyoku).")
+			gameState.GamePhase = PhaseRoundEnd 
 			break
 		}
+		// Also, a general check if wall somehow emptied and game didn't end (e.g. after calls)
+		if wallNowEmpty && len(gameState.Wall) == 0 && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
+			// This condition implies the wall was empty AFTER the draw, and no win occurred.
+			// Redundant if isHaiteiDraw handles it, but a safety.
+			fmt.Println("\nWall is empty after player's turn! Round ends in a draw (Ryuukyoku).")
+			gameState.GamePhase = PhaseRoundEnd
+			break
+		}
+
 
 		// Small delay for non-human players
 		if !isHumanPlayer && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {

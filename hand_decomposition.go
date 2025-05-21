@@ -78,147 +78,239 @@ func DecomposeWinningHand(player *Player, allWinningTiles []Tile) ([]DecomposedG
 		return nil, false // Cannot decompose if tile counts don't match
 	}
 
-	// 2. Recursively decompose the remaining hand tiles
-	handComponents, success := decomposeRecursive(handTilesForDecomp, groupsNeeded, pairsNeeded)
+	// 2. Attempt to find a pair and then decompose the remaining hand tiles into melds.
+	// pairsNeeded is effectively always 1 for a standard hand decomposition.
 
-	if !success {
-		fmt.Println("Debug: Recursive decomposition failed.")
-		return nil, false
-	}
-
-	// 3. Combine melded groups and decomposed hand components
-	allComponents := append(meldedGroups, handComponents...)
-
-	// Final validation: Should have exactly 5 components (4 groups + 1 pair)
-	if len(allComponents) != 5 {
-		fmt.Printf("Warning: Decomposition resulted in %d components, expected 5.\n", len(allComponents))
-		return nil, false
-	}
-	numGroups := 0
-	numPairs := 0
-	for _, comp := range allComponents {
-		if comp.Type == TypePair {
-			numPairs++
-		} else {
-			numGroups++
-		}
-	}
-	if numGroups != 4 || numPairs != 1 {
-		fmt.Printf("Warning: Decomposition resulted in %d groups and %d pairs, expected 4 and 1.\n", numGroups, numPairs)
-		return nil, false
-	}
-
-	return allComponents, true
-}
-
-// decomposeRecursive attempts to find groups/pairs in the sorted hand tiles.
-// Returns the list of DecomposedGroup found and success boolean.
-// IMPORTANT: This is a greedy implementation. It might fail on complex valid hands
-// where the initial greedy choice prevents finding the correct overall decomposition.
-func decomposeRecursive(currentHand []Tile, groupsNeeded int, pairsNeeded int) ([]DecomposedGroup, bool) {
-	components := []DecomposedGroup{}
-
-	// Base Case: Success
-	if len(currentHand) == 0 && groupsNeeded == 0 && pairsNeeded == 0 {
-		return components, true
-	}
-	// Base Case: Failure / Impossible state
-	if groupsNeeded < 0 || pairsNeeded < 0 || len(currentHand) < (groupsNeeded*3+pairsNeeded*2) || (len(currentHand) == 0 && (groupsNeeded > 0 || pairsNeeded > 0)) {
-		return nil, false
-	}
-
-	// --- Try Removing Components (Greedy Order: Pair > Pung > Chi) ---
-
-	// 1. Try Removing a Pair
-	if pairsNeeded > 0 && len(currentHand) >= 2 {
-		if currentHand[0].Suit == currentHand[1].Suit && currentHand[0].Value == currentHand[1].Value {
+	// If no further groups need to be found in hand (i.e., 4 melds are open)
+	if groupsNeeded == 0 {
+		if len(handTilesForDecomp) == 2 && tilesAreEqual(handTilesForDecomp[0], handTilesForDecomp[1]) {
 			pairGroup := DecomposedGroup{
 				Type:        TypePair,
-				Tiles:       []Tile{currentHand[0], currentHand[1]},
-				IsConcealed: true, // Pairs are always from hand/concealed part
+				Tiles:       handTilesForDecomp,
+				IsConcealed: true, // Pair from hand is concealed
 			}
-			remainingComponents, success := decomposeRecursive(currentHand[2:], groupsNeeded, pairsNeeded-1)
+			// All components are the already melded groups + this pair
+			allComponents := append(meldedGroups, pairGroup)
+			// Final validation for this specific case
+			if len(allComponents) != 5 {
+				// This implies an issue with meldedGroups count if groupsNeeded was 0
+				// fmt.Printf("Debug: (groupsNeeded=0) Expected 5 components, got %d\n", len(allComponents))
+				return nil, false
+			}
+			numFoundGroups := 0
+			numFoundPairs := 0
+			for _, comp := range allComponents {
+				if comp.Type == TypePair {
+					numFoundPairs++
+				} else {
+					numFoundGroups++
+				}
+			}
+			if numFoundGroups == 4 && numFoundPairs == 1 {
+				return allComponents, true
+			}
+			// fmt.Printf("Debug: (groupsNeeded=0) Expected 4 groups & 1 pair, got %d & %d\n", numFoundGroups, numFoundPairs)
+			return nil, false
+		}
+		// Not a valid pair left in hand, or wrong number of tiles.
+		// fmt.Printf("Debug: groupsNeeded is 0, but handTilesForDecomp is not a pair. Size: %d\n", len(handTilesForDecomp))
+		return nil, false
+	}
+
+	// If we need to find groups and must have a pair from hand.
+	// At least 2 tiles for pair + 3 for each group needed.
+	if len(handTilesForDecomp) < (2 + groupsNeeded*3) {
+		// fmt.Printf("Debug: Not enough hand tiles for a pair and %d groups. Have %d, need %d.\n", groupsNeeded, len(handTilesForDecomp), 2+groupsNeeded*3)
+		return nil, false
+	}
+
+	// Iterate through all unique tiles in handTilesForDecomp to select a pair.
+	// Then, try to decompose the rest into 'groupsNeeded' melds.
+	tileCounts := make(map[string]int) // Counts of each tile type
+	uniqueTileExemplars := []Tile{}    // One exemplar of each unique tile type
+	for _, t := range handTilesForDecomp {
+		// Key for tile type uniqueness is Suit and Value.
+		key := fmt.Sprintf("%s-%d", t.Suit, t.Value)
+		if tileCounts[key] == 0 {
+			uniqueTileExemplars = append(uniqueTileExemplars, t)
+		}
+		tileCounts[key]++
+	}
+	// uniqueTileExemplars are already effectively sorted by appearance in sorted handTilesForDecomp.
+
+	for _, pairExemplar := range uniqueTileExemplars {
+		key := fmt.Sprintf("%s-%d", pairExemplar.Suit, pairExemplar.Value)
+		if tileCounts[key] >= 2 { // Found a potential pair
+			pairGroup := DecomposedGroup{
+				Type: TypePair,
+				// Create the pair with two distinct tile instances if possible, or use exemplar twice.
+				// For logic, exemplar twice is fine as long as counts are right.
+				// Actual tile instances might matter for IDs if used later, but for structure, this is okay.
+				Tiles:       []Tile{pairExemplar, pairExemplar},
+				IsConcealed: true,
+			}
+
+			// Create remaining hand after removing this pair
+			remainingForMelds := make([]Tile, 0, len(handTilesForDecomp)-2)
+			removedCount := 0
+			for _, t := range handTilesForDecomp { // Iterate original sorted hand to build remaining
+				if tilesAreEqual(t, pairExemplar) && removedCount < 2 {
+					removedCount++
+					continue
+				}
+				remainingForMelds = append(remainingForMelds, t)
+			}
+			// 'remainingForMelds' is already sorted because 'handTilesForDecomp' was sorted
+			// and we iterated through it, preserving relative order of non-pair tiles.
+
+			// Now, find 'groupsNeeded' melds from 'remainingForMelds'
+			foundMelds, success := findMeldsRecursive(remainingForMelds, groupsNeeded)
 			if success {
-				return append([]DecomposedGroup{pairGroup}, remainingComponents...), true
+				allComponents := append(meldedGroups, pairGroup)
+				allComponents = append(allComponents, foundMelds...)
+
+				// Final validation: Should have exactly 5 components (4 groups + 1 pair)
+				if len(allComponents) != 5 {
+					// This should ideally not happen if logic is correct
+					// fmt.Printf("Debug: Final validation failed. Expected 5 components, got %d\n", len(allComponents))
+					continue // Try next pair, this path was somehow invalid
+				}
+				numFoundGroups := 0
+				numFoundPairs := 0
+				for _, comp := range allComponents {
+					if comp.Type == TypePair {
+						numFoundPairs++
+					} else {
+						numFoundGroups++
+					}
+				}
+				if numFoundGroups == 4 && numFoundPairs == 1 {
+					return allComponents, true // Success!
+				}
+				// This also should ideally not happen with correct group/pair counts
+				// fmt.Printf("Debug: Final validation failed. Expected 4 groups & 1 pair, got %d & %d\n", numFoundGroups, numFoundPairs)
+				// Continue to try next pair if this specific combination didn't meet final counts.
 			}
-			// Backtrack: Removing this pair didn't work, continue trying other options below.
+			// If findMeldsRecursive failed, backtrack: the loop will try the next potential pair.
 		}
 	}
 
-	// 2. Try Removing a Pung (Triplet)
-	if groupsNeeded > 0 && len(currentHand) >= 3 {
-		if currentHand[0].Suit == currentHand[1].Suit && currentHand[0].Value == currentHand[1].Value &&
-			currentHand[0].Suit == currentHand[2].Suit && currentHand[0].Value == currentHand[2].Value {
-			pungGroup := DecomposedGroup{
-				Type:        TypeTriplet,
-				Tiles:       []Tile{currentHand[0], currentHand[1], currentHand[2]},
-				IsConcealed: true, // If found here, it's an Ankou (concealed triplet)
-			}
-			remainingComponents, success := decomposeRecursive(currentHand[3:], groupsNeeded-1, pairsNeeded)
-			if success {
-				return append([]DecomposedGroup{pungGroup}, remainingComponents...), true
-			}
-			// Backtrack
+	// If no pair combination led to a successful decomposition of the remaining tiles.
+	// fmt.Println("Debug: DecomposeWinningHand could not find a valid pair + melds combination.")
+	return nil, false // Moved the original allComponents and related checks into the loop success path
+}
+
+// tilesAreEqual checks if two tiles are of the same suit and value.
+// This is a helper function, place it appropriately (e.g., near findMeldsRecursive or as a package utility).
+func tilesAreEqual(t1, t2 Tile) bool {
+	return t1.Suit == t2.Suit && t1.Value == t2.Value
+}
+
+// findMeldsRecursive attempts to find 'groupsNeeded' melds (Pungs or Chis) from the 'currentHand'.
+// 'currentHand' must be sorted.
+// This function tries to form a meld using the first tile (currentHand[0]),
+// then recursively calls itself for the remaining tiles and groups.
+func findMeldsRecursive(currentHand []Tile, groupsNeeded int) ([]DecomposedGroup, bool) {
+	// Base Case: Success - all groups found
+	if groupsNeeded == 0 {
+		if len(currentHand) == 0 {
+			return []DecomposedGroup{}, true // Successfully decomposed all groups, no tiles left
 		}
+		// fmt.Printf("Debug: findMeldsRecursive groupsNeeded is 0, but %d tiles remain.\n", len(currentHand))
+		return nil, false // All groups found, but tiles are inexplicably left over
 	}
 
-	// 3. Try Removing a Chi (Sequence)
-	if groupsNeeded > 0 && len(currentHand) >= 3 && currentHand[0].Suit != "Wind" && currentHand[0].Suit != "Dragon" {
-		v1 := currentHand[0].Value
-		s1 := currentHand[0].Suit
-		idx2 := -1
-		idx3 := -1
-		// Find first occurrence of v+1
-		for k := 1; k < len(currentHand); k++ {
-			if currentHand[k].Suit == s1 && currentHand[k].Value == v1+1 {
-				idx2 = k
+	// Base Case: Failure - not enough tiles to form remaining groups, or no tiles left when groups are still needed.
+	if len(currentHand) < groupsNeeded*3 || len(currentHand) == 0 {
+		// fmt.Printf("Debug: findMeldsRecursive not enough tiles or no tiles. Have %d, need %d groups (min %d tiles).\n", len(currentHand), groupsNeeded, groupsNeeded*3)
+		return nil, false
+	}
+
+	// Option 1: Try to form a Pung (triplet) with the first tile
+	// Check if the first three tiles are identical
+	if len(currentHand) >= 3 && tilesAreEqual(currentHand[0], currentHand[1]) && tilesAreEqual(currentHand[0], currentHand[2]) {
+		pungGroup := DecomposedGroup{
+			Type:        TypeTriplet,
+			Tiles:       []Tile{currentHand[0], currentHand[1], currentHand[2]},
+			IsConcealed: true, // Melds found in hand are concealed
+		}
+		// Recursively find remaining groups from the rest of the hand (after the Pung)
+		remainingMelds, success := findMeldsRecursive(currentHand[3:], groupsNeeded-1)
+		if success {
+			return append([]DecomposedGroup{pungGroup}, remainingMelds...), true
+		}
+		// If forming a Pung with currentHand[0] and then decomposing the rest failed,
+		// we backtrack and next try to form a Chi with currentHand[0] (if applicable).
+		// Execution will flow to the Chi attempt below.
+	}
+
+	// Option 2: Try to form a Chi (sequence) with the first tile
+	// Sequences cannot be made with Wind or Dragon tiles.
+	if currentHand[0].Suit != "Wind" && currentHand[0].Suit != "Dragon" {
+		tile1 := currentHand[0]
+		idx2 := -1 // Index of the second tile in the sequence (value + 1)
+		idx3 := -1 // Index of the third tile in the sequence (value + 2)
+
+		// Find the first occurrence of tile1.Value + 1 in the same suit
+		for i := 1; i < len(currentHand); i++ { // Start from 1 as currentHand[0] is tile1
+			if tilesAreEqual(Tile{Suit: tile1.Suit, Value: tile1.Value + 1}, currentHand[i]) {
+				idx2 = i
 				break
 			}
 		}
-		// Find first occurrence of v+2 *after* v+1
+
+		// If the second tile was found, find the first occurrence of tile1.Value + 2
 		if idx2 != -1 {
-			for k := idx2 + 1; k < len(currentHand); k++ {
-				if currentHand[k].Suit == s1 && currentHand[k].Value == v1+2 {
-					idx3 = k
+			// Start search for the third tile *after* the found second tile (idx2)
+			for i := idx2 + 1; i < len(currentHand); i++ {
+				if tilesAreEqual(Tile{Suit: tile1.Suit, Value: tile1.Value + 2}, currentHand[i]) {
+					idx3 = i
 					break
 				}
 			}
 		}
 
-		if idx3 != -1 { // Found a Chi: currentHand[0], currentHand[idx2], currentHand[idx3]
+		// If all three tiles for a sequence were found (idx2 and idx3 are valid)
+		if idx3 != -1 { // implies idx2 is also valid
 			chiGroup := DecomposedGroup{
 				Type:        TypeSequence,
 				Tiles:       []Tile{currentHand[0], currentHand[idx2], currentHand[idx3]},
-				IsConcealed: true, // If found here, it's from the concealed hand part
-			}
-			// Create remaining hand *carefully* excluding used indices
-			remainingHand := []Tile{}
-			indicesUsed := map[int]bool{0: true, idx2: true, idx3: true}
-			for k := 0; k < len(currentHand); k++ {
-				if !indicesUsed[k] {
-					remainingHand = append(remainingHand, currentHand[k])
-				}
+				IsConcealed: true, // Melds found in hand are concealed
 			}
 
-			remainingComponents, success := decomposeRecursive(remainingHand, groupsNeeded-1, pairsNeeded)
-			if success {
-				return append([]DecomposedGroup{chiGroup}, remainingComponents...), true
+			// Create the next hand by carefully removing the used tiles (currentHand[0], currentHand[idx2], currentHand[idx3])
+			nextHand := make([]Tile, 0, len(currentHand)-3)
+			// This map helps identify which indices to skip when building nextHand
+			indicesUsed := map[int]bool{0: true, idx2: true, idx3: true}
+			for i := 0; i < len(currentHand); i++ {
+				if !indicesUsed[i] {
+					nextHand = append(nextHand, currentHand[i])
+				}
 			}
-			// Backtrack
+			// The 'nextHand' will remain sorted relative to itself because 'currentHand' was sorted,
+			// and we are iterating through 'currentHand' in order, appending kept tiles.
+
+			// Recursively find remaining groups from the 'nextHand'
+			remainingMelds, success := findMeldsRecursive(nextHand, groupsNeeded-1)
+			if success {
+				return append([]DecomposedGroup{chiGroup}, remainingMelds...), true
+			}
+			// If forming a Chi with currentHand[0] and then decomposing the rest failed, we backtrack.
+			// Since Pung was tried before (if applicable), and now Chi also failed with currentHand[0],
+			// this means currentHand[0] cannot start any meld that leads to a valid full decomposition
+			// down this particular recursive path.
 		}
 	}
 
-	// If none of the removals starting with the first tile worked, this path fails (greedy limitation).
-	// A more robust decomposer would need to try removing elements not starting at index 0.
+	// If we reach here, it means neither a Pung nor a Chi starting with currentHand[0]
+	// (that could be successfully formed and lead to a full decomposition of the rest) was found.
+	// This specific path of recursion fails.
+	// fmt.Printf("Debug: findMeldsRecursive could not form Pung or Chi with %s to satisfy %d groups from %v\n", currentHand[0].Name, groupsNeeded, currentHand)
 	return nil, false
 }
 
-// Helper to check if a tile ID exists in a list of DecomposedGroup tiles
-func groupContainsTileID(group DecomposedGroup, tileID int) bool {
-	for _, t := range group.Tiles {
-		if t.ID == tileID {
-			return true
-		}
-	}
-	return false
-}
+// decomposeRecursive attempts to find groups/pairs in the sorted hand tiles.
+// Returns the list of DecomposedGroup found and success boolean.
+// The old decomposeRecursive and groupContainsTileID functions are now removed.
+// The main DecomposeWinningHand function above has been updated to use findMeldsRecursive.
+// The findMeldsRecursive and tilesAreEqual functions are already part of the file from the previous partial update.
