@@ -7,287 +7,218 @@ import (
 )
 
 // ==========================================================
-// Hand Completion & Structure Checks (Refactored)
+// Hand Completion & Structure Checks
 // ==========================================================
+
 // IsCompleteHand checks if a hand forms a valid winning shape (Standard, Chiitoi, Kokushi).
-// It considers existing melds and the final 14th tile (either drawn or claimed).
-// `handTilesForCheck` should contain the tiles NOT part of existing melds,
-// including the potential 14th winning tile.
-// `melds` are the pre-existing melds.
+// `handTilesForCheck` should be the concealed tiles (including the 14th winning tile).
+// `melds` are the player's existing melds.
 func IsCompleteHand(handTilesForCheck []Tile, melds []Meld) bool {
-
 	numMelds := len(melds)
-
-	// --- Check for correct number of hand tiles based on melds ---
-	// Calculate tiles needed for remaining groups + pair
 	groupsNeeded := 4 - numMelds
-	pairsNeeded := 1 // A standard hand always needs 1 pair
+	pairsNeeded := 1 // Standard hand always needs 1 pair
 
-	if groupsNeeded < 0 {
-		// More than 4 melds somehow? Invalid state.
-		fmt.Printf("Debug Warning: IsCompleteHand called with >4 melds (%d).\n", numMelds)
+	if groupsNeeded < 0 { // More than 4 melds (shouldn't happen with valid Kan logic)
+		// fmt.Printf("Debug Warning: IsCompleteHand called with >4 melds (%d).\n", numMelds)
+		return false
+	}
+	expectedHandTiles := groupsNeeded*3 + pairsNeeded*2
+	if len(handTilesForCheck) != expectedHandTiles {
+		// This check is vital. If the tile count is off, it cannot form the required structure.
+		// fmt.Printf("Debug Warning: IsCompleteHand inconsistent tile count. Hand: %d, Expected: %d (for %d groups, %d pair from %d melds).\n",
+		// 	len(handTilesForCheck), expectedHandTiles, groupsNeeded, pairsNeeded, numMelds)
 		return false
 	}
 
-	expectedHandTiles := groupsNeeded*3 + pairsNeeded*2
-
-	// Ensure the input hand tiles match the expected count for the remaining structure
-	if len(handTilesForCheck) != expectedHandTiles {
-		// This indicates a mismatch between melds and hand tiles provided, or an invalid number of tiles overall.
-		// For example, after drawing the 14th tile, handTilesForCheck should contain exactly expectedHandTiles.
-		// Allow the check to proceed even with mismatch, as intermediate checks might call it.
-		// The caller (e.g., CanDeclareRon/Tsumo) should ensure the correct number of tiles are passed initially.
-		// fmt.Printf("Debug Warning: IsCompleteHand inconsistent tile count. Hand tiles received: %d, Expected: %d (for %d groups + %d pair needed).\n",
-		// 	len(handTilesForCheck), expectedHandTiles, groupsNeeded, pairsNeeded)
-		// // Return false because the input doesn't have the correct number of tiles to complete the structure.
-		// return false
-	}
-	// --- End Tile Count Check ---
-
-	// Need a mutable copy of hand tiles for recursive checks
+	// Create a mutable copy for recursive checks, ensure it's sorted.
 	handCopy := make([]Tile, len(handTilesForCheck))
 	copy(handCopy, handTilesForCheck)
-	sort.Sort(BySuitValue(handCopy)) // Ensure sorted for checks
+	sort.Sort(BySuitValue(handCopy))
 
-	// --- Check Special Hands (Require concealed state, no open melds) ---
-	isConcealed := true
-	for _, m := range melds {
-		if !m.IsConcealed { // Any open meld disqualifies Kokushi/Chiitoitsu
-			isConcealed = false
-			break
+	// Check Special Hands (Kokushi, Chiitoitsu)
+	// These require a fully concealed hand (only Ankans allowed as "melds" which are part of hand)
+	// and exactly 14 tiles in the `handTilesForCheck` if no melds exist.
+	isEffectivelyConcealed := true
+	if numMelds > 0 { // If there are melds, check if all are Ankan
+		for _, m := range melds {
+			if m.Type != "Ankan" { // Ankan is considered part of a concealed hand for these purposes
+				isEffectivelyConcealed = false
+				break
+			}
 		}
 	}
 
-	// Check Kokushi/Chiitoitsu only if the hand *was* originally concealed (numMelds == 0 implies no open melds)
-	// AND we are checking a full 14-tile hand.
-	if isConcealed && numMelds == 0 && len(handTilesForCheck) == 14 {
-		if IsKokushiMusou(handCopy) { // Pass the 14 tiles
+	if isEffectivelyConcealed && numMelds == 0 && len(handTilesForCheck) == 14 { // Must be 14 tiles in hand if no melds
+		if IsKokushiMusou(handCopy) {
 			return true
 		}
-		if IsChiitoitsu(handCopy) { // Pass the 14 tiles
+		if IsChiitoitsu(handCopy) {
 			return true
 		}
 	}
 
-	// --- Check Standard Hand (4 Groups + 1 Pair) ---
-	// groupsNeeded and pairsNeeded were calculated earlier.
-
-	// CheckStandardHandRecursive should verify if handCopy (containing expectedHandTiles number of tiles)
-	// can form groupsNeeded groups and pairsNeeded pair.
+	// Check Standard Hand (4 Groups + 1 Pair)
+	// `groupsNeeded` and `pairsNeeded` were calculated based on existing `melds`.
+	// `handCopy` contains the tiles that need to form these remaining groups/pair.
 	return CheckStandardHandRecursive(handCopy, groupsNeeded, pairsNeeded)
 }
 
 // CheckStandardHandRecursive attempts to find `groupsNeeded` groups (Pung/Chi)
-// and `pairsNeeded` pairs from the `currentHand` tiles.
-// Assumes `currentHand` is sorted.
+// and `pairsNeeded` pairs from the `currentHand` tiles. Assumes `currentHand` is sorted.
 func CheckStandardHandRecursive(currentHand []Tile, groupsNeeded int, pairsNeeded int) bool {
-	// Base Case: Success - Found all required groups and pairs, no tiles left.
+	// Base Case: Success
 	if len(currentHand) == 0 && groupsNeeded == 0 && pairsNeeded == 0 {
 		return true
 	}
-	// Base Case: Failure - Impossible to form remaining groups/pairs with leftover tiles.
-	// Or negative counts needed (shouldn't happen with proper calls).
+	// Base Case: Failure (impossible to form remaining with leftover tiles, or negative counts)
 	if groupsNeeded < 0 || pairsNeeded < 0 || len(currentHand) < (groupsNeeded*3+pairsNeeded*2) {
 		return false
 	}
-	// Base Case: Optimization - If no tiles left but still need groups/pairs
+	// Base Case: No tiles left but still need groups/pairs
 	if len(currentHand) == 0 && (groupsNeeded > 0 || pairsNeeded > 0) {
 		return false
 	}
-
-	// --- Recursive Steps: Try removing a component ---
-	// Prioritize removing pair first can sometimes be faster, but not strictly necessary.
 
 	// 1. Try Removing a Pair (if needed)
 	if pairsNeeded > 0 && len(currentHand) >= 2 {
 		// Check if first two tiles form a pair (Suit/Value match)
 		if currentHand[0].Suit == currentHand[1].Suit && currentHand[0].Value == currentHand[1].Value {
-			// Recursively check if the rest of the hand can form the remaining groups/pairs
 			if CheckStandardHandRecursive(currentHand[2:], groupsNeeded, pairsNeeded-1) {
-				return true // Found a valid path by removing this pair first
+				return true
 			}
-			// Backtrack: If removing this pair didn't lead to a solution, continue searching.
 		}
 	}
 
 	// 2. Try Removing a Pung (Triplet) (if needed)
 	if groupsNeeded > 0 && len(currentHand) >= 3 {
-		// Check if first three tiles form a Pung (Suit/Value match)
 		if currentHand[0].Suit == currentHand[1].Suit && currentHand[0].Value == currentHand[1].Value &&
 			currentHand[0].Suit == currentHand[2].Suit && currentHand[0].Value == currentHand[2].Value {
-			// Recursively check if the rest of the hand can form the remaining groups/pairs
 			if CheckStandardHandRecursive(currentHand[3:], groupsNeeded-1, pairsNeeded) {
-				return true // Found a valid path by removing this Pung first
+				return true
 			}
-			// Backtrack: If removing this Pung didn't lead to a solution, continue searching.
 		}
 	}
 
 	// 3. Try Removing a Chi (Sequence) (if needed)
-	if groupsNeeded > 0 && len(currentHand) >= 3 && currentHand[0].Suit != "Wind" && currentHand[0].Suit != "Dragon" {
-		v1 := currentHand[0].Value
-		s1 := currentHand[0].Suit
-		idx2 := -1 // Index of value+1 tile
-		idx3 := -1 // Index of value+2 tile
+	if groupsNeeded > 0 && len(currentHand) >= 3 && IsSimple(currentHand[0]) || IsTerminal(currentHand[0]) && currentHand[0].Value <= 7 {
+		// Sequences only for Man, Pin, Sou and starting tile must allow for a sequence (e.g., not 8 or 9 for some)
+		if currentHand[0].Suit != "Wind" && currentHand[0].Suit != "Dragon" {
+			v1, s1 := currentHand[0].Value, currentHand[0].Suit
+			idx2, idx3 := -1, -1
 
-		// Find first occurrence of value+1 in the remaining hand
-		for k := 1; k < len(currentHand); k++ {
-			if currentHand[k].Suit == s1 && currentHand[k].Value == v1+1 {
-				idx2 = k
-				break
-			}
-		}
-		// Find first occurrence of value+2 *after* index idx2
-		if idx2 != -1 {
-			for k := idx2 + 1; k < len(currentHand); k++ {
-				if currentHand[k].Suit == s1 && currentHand[k].Value == v1+2 {
-					idx3 = k
-					break
+			for k := 1; k < len(currentHand); k++ { // Find v1+1
+				if currentHand[k].Suit == s1 && currentHand[k].Value == v1+1 {
+					idx2 = k; break
 				}
 			}
-		}
-
-		// If we found a complete sequence (tiles at indices 0, idx2, idx3)
-		if idx3 != -1 {
-			// Create the remaining hand by excluding these three specific tiles
-			remainingHand := []Tile{}
-			indicesUsed := map[int]bool{0: true, idx2: true, idx3: true}
-			for k := 0; k < len(currentHand); k++ {
-				if !indicesUsed[k] {
-					remainingHand = append(remainingHand, currentHand[k])
+			if idx2 != -1 {
+				for k := idx2 + 1; k < len(currentHand); k++ { // Find v1+2
+					if currentHand[k].Suit == s1 && currentHand[k].Value == v1+2 {
+						idx3 = k; break
+					}
 				}
 			}
 
-			// Recursively check if the rest of the hand can form the remaining groups/pairs
-			if CheckStandardHandRecursive(remainingHand, groupsNeeded-1, pairsNeeded) {
-				return true // Found a valid path by removing this Chi first
+			if idx3 != -1 { // Found sequence 0, idx2, idx3
+				remainingHand := []Tile{}
+				indicesUsed := map[int]bool{0: true, idx2: true, idx3: true}
+				for k := 0; k < len(currentHand); k++ {
+					if !indicesUsed[k] {
+						remainingHand = append(remainingHand, currentHand[k])
+					}
+				}
+				if CheckStandardHandRecursive(remainingHand, groupsNeeded-1, pairsNeeded) {
+					return true
+				}
 			}
-			// Backtrack: If removing this Chi didn't lead to a solution, continue searching.
 		}
 	}
-
-	// --- Backtracking Limitation ---
-	// The current greedy approach based on the first tile might fail complex waits.
-	// If none of the above checks starting with currentHand[0] led to a solution,
-	// this path fails under the greedy assumption. A more complex algorithm would
-	// explore removing groups/pairs starting at other indices.
-	return false
+	return false // No path found from current state with greedy choices
 }
 
-// --- Rest of checks.go (IsKokushiMusou, IsChiitoitsu, IsTenpai, etc.) ---
-
-// IsKokushiMusou checks for the 13 Orphans hand (14 tiles version - pair wait)
+// IsKokushiMusou checks for the 13 Orphans hand (14 tiles version - pair wait).
 func IsKokushiMusou(hand []Tile) bool {
-	if len(hand) != 14 {
-		return false
-	}
-
-	terminalsAndHonors := map[string]int{ // Tile Name -> Required Count (initially 0)
+	if len(hand) != 14 { return false }
+	terminalsAndHonors := map[string]int{
 		"Man 1": 0, "Man 9": 0, "Pin 1": 0, "Pin 9": 0, "Sou 1": 0, "Sou 9": 0,
 		"East": 0, "South": 0, "West": 0, "North": 0,
 		"White": 0, "Green": 0, "Red": 0,
 	}
-	requiredTypes := len(terminalsAndHonors) // 13 unique types needed
-	foundTypes := 0
-	hasPair := false
+	requiredTypes := len(terminalsAndHonors)
+	foundTypes, hasPair := 0, false
 	tileCountsByName := make(map[string]int)
-
 	for _, tile := range hand {
-		// Use base name (strip "Red ") for checking requirement
-		baseName := strings.TrimPrefix(tile.Name, "Red ")
+		baseName := strings.TrimPrefix(tile.Name, "Red ") // Red fives don't affect Kokushi
 		tileCountsByName[baseName]++
 	}
-
 	for name, count := range tileCountsByName {
 		_, isRequired := terminalsAndHonors[name]
 		if isRequired {
-			if count > 2 {
-				return false
-			} // Cannot have > 2 of any required type
+			if count > 2 { return false } // Max 2 of any required type (for the pair)
 			if count >= 1 {
-				// Only increment foundTypes *once* per required type
-				if terminalsAndHonors[name] == 0 {
-					foundTypes++
-				}
-				terminalsAndHonors[name] = count // Store actual count
+				if terminalsAndHonors[name] == 0 { foundTypes++ } // Count unique type found
+				terminalsAndHonors[name] = count
 			}
 			if count == 2 {
-				if hasPair {
-					return false
-				} // Cannot have more than one pair
+				if hasPair { return false } // Only one pair allowed
 				hasPair = true
 			}
-		} else {
-			return false // Contains a tile not part of the Kokushi set
-		}
+		} else { return false } // Contains a tile not part of Kokushi set
 	}
-
 	return foundTypes == requiredTypes && hasPair
 }
 
-// IsChiitoitsu checks for the Seven Pairs hand (14 tiles)
+// IsChiitoitsu checks for the Seven Pairs hand (14 tiles).
 func IsChiitoitsu(hand []Tile) bool {
-	if len(hand) != 14 {
-		return false
-	}
-
-	// Use unique ID counts for Chiitoitsu, as identical tiles (Red 5m, Red 5m) form a pair.
-	tileCountsByID := make(map[int]int)
-	for _, t := range hand {
-		tileCountsByID[t.ID]++
-	}
+	if len(hand) != 14 { return false }
+	tileCountsByID := make(map[int]int) // Use specific tile ID for Chiitoitsu (e.g. Red 5m is different from normal 5m)
+	for _, t := range hand { tileCountsByID[t.ID]++ }
 	pairCountByID := 0
 	for _, count := range tileCountsByID {
-		if count == 2 {
-			pairCountByID++
-		} else if count == 4 {
-			pairCountByID += 2 // Treat 4 identical tiles as 2 pairs for Chiitoitsu
-		} else if count != 0 {
-			// Any other count (1, 3, etc.) based on specific tile ID invalidates Chiitoitsu
-			return false
-		}
+		if count == 2 { pairCountByID++ } else if count == 4 { pairCountByID += 2 } // 4 identical tiles = 2 pairs
+		else if count != 0 { return false } // Any other count (1, 3) invalidates
 	}
-
 	return pairCountByID == 7
 }
 
-// IsTenpai checks if a hand is one tile away from being complete.
-// Expects a 13-tile hand state (currentHand + melds).
+// IsTenpai checks if a 13-tile hand state (currentHand + melds) is one tile away from being complete.
 func IsTenpai(currentHand []Tile, melds []Meld) bool {
-	// Calculate expected number of tiles in hand based on melds
-	numMeldTiles := 0
 	numKans := 0
-	for _, m := range melds {
-		numMeldTiles += len(m.Tiles) // Assumes len is 3 for P/C, 4 for K
-		if strings.Contains(m.Type, "Kan") {
-			numKans++
-		}
-	}
-	// A standard hand has 13 tiles. Each Kan means one fewer tile is needed in hand.
-	expectedHandSize := HandSize - numKans
+	for _, m := range melds { if strings.Contains(m.Type, "Kan") { numKans++ } }
+	
+	// Expected number of tiles in currentHand (concealed part) for a 13-tile state
+	// A 13-tile hand means total 13 tiles *before* drawing the 14th.
+	// So, HandSize (13) - (tiles_in_melds_not_kans*3) - (tiles_in_kans*4) + kans.
+	// Simpler: expectedHandSize = HandSize (13) - (number of tiles in melds that are not the pair).
+	// If player has 1 meld (3 tiles), hand should have 10. Total 13.
+	// If player has 1 Kan (4 tiles), hand should have 9. Total 13.
+	// This means player.Hand should have 13 - (tiles_in_melds_effectively).
+	// For Tenpai check, currentHand + melds should effectively be 13 tiles.
+	// If a Kan exists, currentHand will be smaller.
+	// The number of tiles in currentHand should be HandSize - numKans.
 
-	currentTotalInHand := len(currentHand)
-	if currentTotalInHand != expectedHandSize {
-		// fmt.Printf("Debug Tenpai Check: Incorrect hand tile count %d, expected %d (HandSize %d - Kans %d)\n",
-		// 	currentTotalInHand, expectedHandSize, HandSize, numKans)
-		// Allow check to proceed, might be called in intermediate states
-	}
+	// This check might be too restrictive if IsTenpai is called in intermediate states.
+	// The core logic relies on adding a test tile to form 14 and checking IsCompleteHand.
+	// expectedConcealedTilesForTenpaiCheck := HandSize - numKans
+	// if len(currentHand) != expectedConcealedTilesForTenpaiCheck {
+	//  fmt.Printf("Debug IsTenpai: currentHand len %d, expected %d (HandSize %d - Kans %d)\n",
+	// 	len(currentHand), expectedConcealedTilesForTenpaiCheck, HandSize, numKans)
+	// // return false // Can be too strict if called at odd times.
+	// }
+
 
 	possibleTiles := GetAllPossibleTiles() // Unique 34 types
-
 	for _, testTile := range possibleTiles {
-		// Create a hypothetical 14-tile state by adding the test tile to the concealed part
-		tempConcealedHand := append([]Tile{}, currentHand...)
-		tempConcealedHand = append(tempConcealedHand, testTile)
-		sort.Sort(BySuitValue(tempConcealedHand)) // Keep it sorted
+		tempConcealedHandWithTestTile := append([]Tile{}, currentHand...)
+		tempConcealedHandWithTestTile = append(tempConcealedHandWithTestTile, testTile)
+		// sort.Sort(BySuitValue(tempConcealedHandWithTestTile)) // IsCompleteHand will sort its copy
 
-		// Check if this hypothetical concealed hand + existing melds forms a complete hand
-		// Pass the tiles NOT in melds (tempConcealedHand) and the original melds list
-		if IsCompleteHand(tempConcealedHand, melds) {
-			return true // Found a wait
+		// IsCompleteHand expects the concealed part (which now includes the test tile, making it 14-equivalent)
+		// and the existing melds.
+		if IsCompleteHand(tempConcealedHandWithTestTile, melds) {
+			return true // Found a tile that completes the hand
 		}
 	}
-
 	return false // No tile completes the hand
 }
 
@@ -295,220 +226,181 @@ func IsTenpai(currentHand []Tile, melds []Meld) bool {
 // Expects a 13-tile hand state (currentHand + melds).
 func FindTenpaiWaits(currentHand []Tile, melds []Meld) []Tile {
 	waits := []Tile{}
-	possibleTiles := GetAllPossibleTiles() // Unique 34 types
-	seenWaits := make(map[string]bool)     // Track waits by Suit-Value to ensure uniqueness
+	possibleTiles := GetAllPossibleTiles()     // Unique 34 types
+	seenWaits := make(map[string]bool)         // Track waits by Suit-Value
 
 	for _, testTile := range possibleTiles {
-		// Create hypothetical 14-tile state (concealed part + test tile)
-		tempConcealedHand := append([]Tile{}, currentHand...)
-		tempConcealedHand = append(tempConcealedHand, testTile)
-		sort.Sort(BySuitValue(tempConcealedHand))
+		tempConcealedHandWithTestTile := append([]Tile{}, currentHand...)
+		tempConcealedHandWithTestTile = append(tempConcealedHandWithTestTile, testTile)
+		// sort.Sort(BySuitValue(tempConcealedHandWithTestTile)) // IsCompleteHand sorts
 
-		// Check completion using this hypothetical state + original melds
-		if IsCompleteHand(tempConcealedHand, melds) {
-			waitKey := fmt.Sprintf("%s-%d", testTile.Suit, testTile.Value)
+		if IsCompleteHand(tempConcealedHandWithTestTile, melds) {
+			// Use non-red version for wait key to group red/non-red waits
+			waitKeyTile := testTile 
+			if waitKeyTile.IsRed { // Create a non-red equivalent for the key
+				waitKeyTile.IsRed = false
+				waitKeyTile.Name = strings.TrimPrefix(waitKeyTile.Name, "Red ")
+			}
+			waitKey := fmt.Sprintf("%s-%d", waitKeyTile.Suit, waitKeyTile.Value)
 			if !seenWaits[waitKey] {
-				waits = append(waits, testTile) // Add representative tile (non-red)
+				waits = append(waits, testTile) // Add the actual tile (can be red or not)
 				seenWaits[waitKey] = true
 			}
 		}
 	}
-	sort.Sort(BySuitValue(waits)) // Sort the waits for display
+	sort.Sort(BySuitValue(waits)) // Sort the waits for display/consistency
 	return waits
 }
 
 // FindPossibleChiSequences identifies the sets of *two hand tiles* needed to form Chi with the discard.
 func FindPossibleChiSequences(player *Player, discardedTile Tile) [][]Tile {
-	var sequences [][]Tile // Stores pairs of hand tiles needed
-	if discardedTile.Suit == "Wind" || discardedTile.Suit == "Dragon" {
-		return sequences
-	}
+	var sequences [][]Tile
+	if IsHonor(discardedTile) { return sequences } // Cannot Chi honor tiles
 
-	val := discardedTile.Value
-	suit := discardedTile.Suit
-	hand := player.Hand // Check against concealed hand
-
-	// --- Find all instances of required tiles in hand ---
+	val, suit, hand := discardedTile.Value, discardedTile.Suit, player.Hand
 	findIndices := func(targetValue int) []int {
 		indices := []int{}
 		for i, tile := range hand {
-			if tile.Suit == suit && tile.Value == targetValue {
-				indices = append(indices, i)
-			}
+			if tile.Suit == suit && tile.Value == targetValue { indices = append(indices, i) }
 		}
 		return indices
 	}
+	valM2Indices, valM1Indices := findIndices(val-2), findIndices(val-1)
+	valP1Indices, valP2Indices := findIndices(val+1), findIndices(val+2)
+	foundSequencesMap := make(map[string][]Tile) // Use map to store unique pairs from hand
 
-	// Indices of tiles in hand matching potential sequence partners
-	valM2Indices := findIndices(val - 2)
-	valM1Indices := findIndices(val - 1)
-	valP1Indices := findIndices(val + 1)
-	valP2Indices := findIndices(val + 2)
-
-	// Use a map to store found sequences (represented by the pair from hand) to avoid duplicates
-	// Key: string like "TileID1-TileID2" (sorted IDs)
-	foundSequencesMap := make(map[string][]Tile)
-
-	// Check Pattern 1: Need (Value-2, Value-1) for sequence [Val-2, Val-1, discard]
+	// Pattern 1: Hand has (Value-2, Value-1) for sequence [Val-2, Val-1, discard]
 	if val >= 3 && len(valM2Indices) > 0 && len(valM1Indices) > 0 {
 		for _, idxM2 := range valM2Indices {
 			for _, idxM1 := range valM1Indices {
-				if idxM1 == idxM2 {
-					continue
-				} // Cannot use the same tile instance
-				tile1 := hand[idxM2]
-				tile2 := hand[idxM1]
-				seqKey := GenerateSequenceKey(tile1, tile2)
+				if idxM1 == idxM2 { continue } // Cannot use the same tile instance
+				tile1, tile2 := hand[idxM2], hand[idxM1]
+				seqKey := GenerateSequenceKey(tile1, tile2) // Key based on sorted IDs of hand tiles
 				foundSequencesMap[seqKey] = []Tile{tile1, tile2}
 			}
 		}
 	}
-
-	// Check Pattern 2: Need (Value-1, Value+1) for sequence [Val-1, discard, Val+1]
+	// Pattern 2: Hand has (Value-1, Value+1) for sequence [Val-1, discard, Val+1]
 	if val >= 2 && val <= 8 && len(valM1Indices) > 0 && len(valP1Indices) > 0 {
 		for _, idxM1 := range valM1Indices {
 			for _, idxP1 := range valP1Indices {
-				if idxM1 == idxP1 {
-					continue
-				}
-				tile1 := hand[idxM1]
-				tile2 := hand[idxP1]
+				if idxM1 == idxP1 { continue }
+				tile1, tile2 := hand[idxM1], hand[idxP1]
 				seqKey := GenerateSequenceKey(tile1, tile2)
 				foundSequencesMap[seqKey] = []Tile{tile1, tile2}
 			}
 		}
 	}
-
-	// Check Pattern 3: Need (Value+1, Value+2) for sequence [discard, Val+1, Val+2]
+	// Pattern 3: Hand has (Value+1, Value+2) for sequence [discard, Val+1, Val+2]
 	if val <= 7 && len(valP1Indices) > 0 && len(valP2Indices) > 0 {
 		for _, idxP1 := range valP1Indices {
 			for _, idxP2 := range valP2Indices {
-				if idxP1 == idxP2 {
-					continue
-				}
-				tile1 := hand[idxP1]
-				tile2 := hand[idxP2]
+				if idxP1 == idxP2 { continue }
+				tile1, tile2 := hand[idxP1], hand[idxP2]
 				seqKey := GenerateSequenceKey(tile1, tile2)
 				foundSequencesMap[seqKey] = []Tile{tile1, tile2}
 			}
 		}
 	}
-
-	// Convert map values back to slice
-	for _, seq := range foundSequencesMap {
-		sequences = append(sequences, seq)
-	}
-
-	// Optional: Sort the outer slice of sequences for consistent ordering in prompts
-	sort.Slice(sequences, func(i, j int) bool {
-		// Sort based on the first tile in the pair (arbitrary but consistent)
-		if sequences[i][0].ID != sequences[j][0].ID {
-			return sequences[i][0].ID < sequences[j][0].ID
-		}
-		return sequences[i][1].ID < sequences[j][1].ID // Then by second tile
+	for _, seq := range foundSequencesMap { sequences = append(sequences, seq) }
+	sort.Slice(sequences, func(i, j int) bool { // Sort outer slice for consistent UI
+		if sequences[i][0].ID != sequences[j][0].ID { return sequences[i][0].ID < sequences[j][0].ID }
+		return sequences[i][1].ID < sequences[j][1].ID
 	})
-
 	return sequences
 }
 
-// Helper function to create a unique key for a pair of tiles based on sorted IDs
+// GenerateSequenceKey creates a unique key for a pair of tiles based on sorted IDs.
 func GenerateSequenceKey(t1, t2 Tile) string {
-	if t1.ID < t2.ID {
-		return fmt.Sprintf("%d-%d", t1.ID, t2.ID)
-	}
+	if t1.ID < t2.ID { return fmt.Sprintf("%d-%d", t1.ID, t2.ID) }
 	return fmt.Sprintf("%d-%d", t2.ID, t1.ID)
 }
 
 // ==========================================================
-// Action Possibility Checks (Updated with Yaku checks)
+// Action Possibility Checks
 // ==========================================================
 
 // CanDeclareRon checks if a player can win by Ron on the discarded tile.
 func CanDeclareRon(player *Player, discardedTile Tile, gs *GameState) bool {
-	if player.IsRiichi && player.IsFuriten {
-		// If in Riichi, temporary Furiten doesn't apply, only permanent matters
-		// TODO: Implement permanent Riichi Furiten check
-		return false // Assume Riichi + Furiten means cannot Ron for now
-	}
-	if !player.IsRiichi && player.IsFuriten {
-		// Standard temporary Furiten applies
+	// Furiten Checks
+	if player.IsPermanentRiichiFuriten { return false }
+	if player.IsFuriten {
+		// If general Furiten (due to own discards or recently missed Ron), cannot Ron.
+		// The logic in UpdateFuritenStatus and DiscardTile (for missed Ron) handles setting IsFuriten.
 		return false
 	}
 
-	// Check if hand becomes complete with the discarded tile
-	// Create a temporary *concealed* hand including the discard
+	// Hand Completion Check
+	// Player.Hand (13 tiles) + discardedTile (1 tile)
 	tempConcealedHand := append([]Tile{}, player.Hand...)
 	tempConcealedHand = append(tempConcealedHand, discardedTile)
-	sort.Sort(BySuitValue(tempConcealedHand))
+	// sort.Sort(BySuitValue(tempConcealedHand)) // IsCompleteHand sorts its copy
 
-	// Check completion using the hypothetical concealed hand + original melds
 	if !IsCompleteHand(tempConcealedHand, player.Melds) {
 		return false // Hand shape is not complete
 	}
 
-	// *** YAKU CHECK ***
-	// Call IdentifyYaku to see if the resulting hand has any Yaku.
-	// Pass isTsumo = false for Ron.
-	_, han := IdentifyYaku(player, discardedTile, false, gs)
-	if han == 0 {
-		// fmt.Printf("Debug: Ron possible shape for %s, but no Yaku found.\n", player.Name) // Optional debug
-		return false // No Yaku, cannot Ron
+	// Yaku Check
+	// Ryanhan Shibari (Two-Han Minimum if Honba >= 5)
+	if gs.Honba >= RyanhanShibariHonbaThreshold {
+		yakuResults, _ := IdentifyYaku(player, discardedTile, false, gs) // isTsumo = false
+		hanWithoutDora := 0
+		for _, yr := range yakuResults {
+			if !strings.HasPrefix(yr.Name, "Dora") { hanWithoutDora += yr.Han }
+		}
+		if hanWithoutDora < 2 {
+			// gs.AddToGameLog(fmt.Sprintf("Debug: %s cannot Ron due to Ryanhan Shibari (needs 2 Han excluding Dora, has %d).", player.Name, hanWithoutDora))
+			return false
+		}
+	} else { // Standard Yaku check (at least 1 Han from any source)
+		_, han := IdentifyYaku(player, discardedTile, false, gs) // isTsumo = false
+		if han == 0 {
+			// gs.AddToGameLog(fmt.Sprintf("Debug: Ron possible shape for %s, but no Yaku found.", player.Name))
+			return false // No Yaku, cannot Ron
+		}
 	}
-
-	return true // Hand is complete AND has at least one Yaku
+	return true // Hand is complete AND has Yaku (and passes Ryanhan Shibari if applicable)
 }
 
 // CanDeclareTsumo checks if the player can win by Tsumo after drawing.
-// Assumes player.Hand currently holds the tiles *after* the draw (including Rinshan).
+// Assumes player.Hand includes the drawn tile (player.JustDrawnTile).
 func CanDeclareTsumo(player *Player, gs *GameState) bool {
-	// Calculate total tiles accounted for (hand + melds)
-	totalTiles := len(player.Hand)
-	numKans := 0 // Count kans specifically if needed, but total count is simpler
-	for _, m := range player.Melds {
-		totalTiles += len(m.Tiles)
-		if strings.Contains(m.Type, "Kan") { // Keep track if needed elsewhere
-			numKans++
-		}
+	// Check total tiles (player.Hand should be 14-equivalent based on melds)
+	// IsCompleteHand will validate the structure based on hand tiles passed and melds.
+	// player.Hand here should be the concealed part *including* the JustDrawnTile.
+	if player.JustDrawnTile == nil {
+		gs.AddToGameLog(fmt.Sprintf("Error in CanDeclareTsumo: %s's JustDrawnTile is nil.", player.Name))
+		return false // Cannot determine Tsumo without knowing the drawn tile
 	}
+	// Furiten does not prevent Tsumo, even permanent Riichi Furiten.
 
-	// A winning hand always consists of 14 tiles total (standard shape)
-	if totalTiles != 14 {
-		fmt.Printf("Warning: CanDeclareTsumo called when total tiles (hand %d + melds) is %d (expected 14).\n", len(player.Hand), totalTiles)
-		return false // Incorrect total number of tiles for a complete hand
-	}
-
-	// Check if the current hand + melds forms a complete shape
-	// IsCompleteHand needs the concealed part + melds.
-	// player.Hand *is* the concealed part after the draw.
+	// Hand Completion Check (player.Hand already includes the drawn tile)
 	if !IsCompleteHand(player.Hand, player.Melds) {
-		return false // Hand shape is not complete
-	}
-
-	// *** YAKU CHECK ***
-	// Need the actual drawn tile. Assuming it's the last one added/sorted.
-	drawnTile := Tile{}
-	if len(player.Hand) > 0 {
-		// Still assuming last tile after sort is the draw. Might need refinement.
-		drawnTile = player.Hand[len(player.Hand)-1]
-	} else {
-		fmt.Println("Warning: CanDeclareTsumo called with empty hand?")
 		return false
 	}
 
-	_, han := IdentifyYaku(player, drawnTile, true, gs) // isTsumo = true
-	if han == 0 {
-		// fmt.Printf("Debug: Tsumo possible shape for %s, but no Yaku found.\n", player.Name)
-		return false // No Yaku, cannot Tsumo
+	// Yaku Check (using player.JustDrawnTile as the agariHai for Tsumo)
+	// Ryanhan Shibari
+	if gs.Honba >= RyanhanShibariHonbaThreshold {
+		yakuResults, _ := IdentifyYaku(player, *player.JustDrawnTile, true, gs) // isTsumo = true
+		hanWithoutDora := 0
+		for _, yr := range yakuResults {
+			if !strings.HasPrefix(yr.Name, "Dora") { hanWithoutDora += yr.Han }
+		}
+		if hanWithoutDora < 2 { return false }
+	} else { // Standard Yaku check
+		_, han := IdentifyYaku(player, *player.JustDrawnTile, true, gs) // isTsumo = true
+		if han == 0 {
+			// gs.AddToGameLog(fmt.Sprintf("Debug: Tsumo possible shape for %s, but no Yaku found.", player.Name))
+			return false
+		}
 	}
-
-	return true // Hand is complete AND has at least one Yaku
+	return true
 }
 
 // CanDeclarePon checks if a player can call Pon on a discarded tile.
 func CanDeclarePon(player *Player, discardedTile Tile) bool {
-	// Player must not have called Chi on the immediately preceding discard (if applicable - rare rule?)
-	// Check if hand is Menzen if specific rules apply (usually not needed for Pon).
-
+	if player.IsRiichi { return false } // Cannot make open calls if in Riichi
 	count := 0
 	for _, tile := range player.Hand {
 		if tile.Suit == discardedTile.Suit && tile.Value == discardedTile.Value {
@@ -519,91 +411,159 @@ func CanDeclarePon(player *Player, discardedTile Tile) bool {
 }
 
 // CanDeclareChi checks if a player can call Chi on a discarded tile.
-// Only the player immediately to the left can call Chi.
 func CanDeclareChi(player *Player, discardedTile Tile) bool {
-	// Basic check: Must not be an honor tile
-	if discardedTile.Suit == "Wind" || discardedTile.Suit == "Dragon" {
-		return false
-	}
+	if player.IsRiichi { return false } // Cannot make open calls if in Riichi
+	if IsHonor(discardedTile) { return false } // Cannot Chi honor tiles
 
-	// Check if hand is Menzen if specific rules apply (usually not needed for Chi).
-
-	// Check for the required pairs in hand
-	val := discardedTile.Value
-	suit := discardedTile.Suit
-	hand := player.Hand
-	// Check Pattern 1: Need (Value-2, Value-1)
-	if val >= 3 && HasTileWithValue(hand, suit, val-2) && HasTileWithValue(hand, suit, val-1) {
-		return true
-	}
-	// Check Pattern 2: Need (Value-1, Value+1)
-	if val >= 2 && val <= 8 && HasTileWithValue(hand, suit, val-1) && HasTileWithValue(hand, suit, val+1) {
-		return true
-	}
-	// Check Pattern 3: Need (Value+1, Value+2)
-	if val <= 7 && HasTileWithValue(hand, suit, val+1) && HasTileWithValue(hand, suit, val+2) {
-		return true
-	}
+	val, suit, hand := discardedTile.Value, discardedTile.Suit, player.Hand
+	// Pattern 1: Need (Value-2, Value-1)
+	if val >= 3 && HasTileWithValue(hand, suit, val-2) && HasTileWithValue(hand, suit, val-1) { return true }
+	// Pattern 2: Need (Value-1, Value+1)
+	if val >= 2 && val <= 8 && HasTileWithValue(hand, suit, val-1) && HasTileWithValue(hand, suit, val+1) { return true }
+	// Pattern 3: Need (Value+1, Value+2)
+	if val <= 7 && HasTileWithValue(hand, suit, val+1) && HasTileWithValue(hand, suit, val+2) { return true }
 	return false
 }
 
 // CanDeclareDaiminkan checks specifically for calling Kan on another player's discard.
 func CanDeclareDaiminkan(player *Player, discardedTile Tile) bool {
-	// Check rule Ssuukantsu (4 Kans total, often abortive draw)
-	// TODO: Implement check for total Kans declared in gs if Ssuukantsu rule applies.
+	if player.IsRiichi { return false } // Riichi players cannot make open calls (Daiminkan)
+
+	// Check Ssuukantsu (4 Kans by ONE player is Yakuman, Suukaikan by multiple is abortive)
+	// gs.TotalKansDeclaredThisRound is for Suukaikan. Player's own Kan count matters for 5th Kan.
 	numPlayerKans := 0
-	for _, m := range player.Melds {
-		if strings.Contains(m.Type, "Kan") {
-			numPlayerKans++
-		}
-	}
-	if numPlayerKans >= 4 { // Cannot declare 5th Kan
-		return false
-	}
+	for _, m := range player.Melds { if strings.Contains(m.Type, "Kan") { numPlayerKans++ } }
+	if numPlayerKans >= 4 { return false } // Cannot declare a 5th Kan
 
 	countInHand := 0
 	for _, t := range player.Hand {
-		if t.Suit == discardedTile.Suit && t.Value == discardedTile.Value {
-			countInHand++
-		}
+		if t.Suit == discardedTile.Suit && t.Value == discardedTile.Value { countInHand++ }
 	}
 	return countInHand == 3
 }
 
-// CanDeclareKanOnDraw checks if the player can declare Ankan or Shouminkan using the drawn tile.
-// Assumes player.Hand includes the drawn tile (14 tiles total).
-func CanDeclareKanOnDraw(player *Player, drawnTile Tile) (string, Tile) {
-	// TODO: Check Ssuukantsu rule
-	numPlayerKans := 0
-	for _, m := range player.Melds {
-		if strings.Contains(m.Type, "Kan") {
-			numPlayerKans++
-		}
+// compareTileSlicesUnordered checks if two slices of Tiles contain the same set of tile types.
+// Used for checking if Riichi waits change.
+func compareTileSlicesUnordered(s1, s2 []Tile) bool {
+	if len(s1) != len(s2) { return false }
+	counts1 := make(map[string]int)
+	counts2 := make(map[string]int)
+	for _, t := range s1 { counts1[fmt.Sprintf("%s-%d-%t", t.Suit, t.Value, t.IsRed)]++ } // Include IsRed for exact match
+	for _, t := range s2 { counts2[fmt.Sprintf("%s-%d-%t", t.Suit, t.Value, t.IsRed)]++ }
+	if len(counts1) != len(counts2) { return false }
+	for key, count1 := range counts1 {
+		if counts2[key] != count1 { return false }
 	}
-	if numPlayerKans >= 4 {
-		return "", Tile{}
+	return true
+}
+
+
+// checkWaitChangeForRiichiKan checks if a Kan declaration would change a Riichi player's waits.
+// This is a complex check. A placeholder implementation.
+func checkWaitChangeForRiichiKan(player *Player, gs *GameState, kanTile Tile, kanType string) bool {
+	if !player.IsRiichi || len(player.RiichiDeclaredWaits) == 0 {
+		return false // Not applicable or no stored waits to compare against
+	}
+
+	// 1. Create a deep copy of the player's current hand and melds to simulate the Kan.
+	tempPlayerHand := make([]Tile, len(player.Hand)); copy(tempPlayerHand, player.Hand)
+	tempPlayerMelds := make([]Meld, len(player.Melds)); copy(tempPlayerMelds, player.Melds)
+	
+	// 2. Simulate performing the Kan on the temporary structures.
+	switch kanType {
+	case "Ankan":
+		// Find 4 'kanTile' in tempPlayerHand and remove them. Add Ankan to tempPlayerMelds.
+		// This logic needs to be robust.
+		indicesToKan := []int{}
+		for i, t := range tempPlayerHand {
+			if t.Suit == kanTile.Suit && t.Value == kanTile.Value {
+				indicesToKan = append(indicesToKan, i)
+			}
+		}
+		if len(indicesToKan) < 4 { return true } // Should not happen if CanDeclareKan was true
+		tempPlayerHand = RemoveTilesByIndices(tempPlayerHand, indicesToKan[:4]) // Remove first 4 found
+		newAnkanMeld := Meld{Type: "Ankan", Tiles: []Tile{kanTile, kanTile, kanTile, kanTile}, IsConcealed: true}
+		tempPlayerMelds = append(tempPlayerMelds, newAnkanMeld)
+
+	case "Shouminkan":
+		// Find 'kanTile' in tempPlayerHand and remove it. Find matching Pon in tempPlayerMelds and upgrade it.
+		idxToRemove := -1
+		for i, t := range tempPlayerHand {
+			if t.Suit == kanTile.Suit && t.Value == kanTile.Value {
+				idxToRemove = i; break
+			}
+		}
+		if idxToRemove == -1 { return true } // Tile not in hand for Shouminkan
+		tempPlayerHand = RemoveTilesByIndices(tempPlayerHand, []int{idxToRemove})
+
+		ponFoundAndUpgraded := false
+		for i, m := range tempPlayerMelds {
+			if m.Type == "Pon" && m.Tiles[0].Suit == kanTile.Suit && m.Tiles[0].Value == kanTile.Value {
+				tempPlayerMelds[i].Type = "Shouminkan"
+				tempPlayerMelds[i].Tiles = append(tempPlayerMelds[i].Tiles, kanTile) // Add the 4th tile
+				sort.Sort(BySuitValue(tempPlayerMelds[i].Tiles))
+				ponFoundAndUpgraded = true; break
+			}
+		}
+		if !ponFoundAndUpgraded { return true } // No matching Pon to upgrade
+	default:
+		return true // Unknown Kan type for this check, assume waits change for safety
+	}
+
+	// 3. Find new waits with the temporary hand state.
+	// Note: After Kan, hand size reduces by 1 (Ankan) or stays same (Shouminkan, but one tile moved from hand to meld).
+	// FindTenpaiWaits expects the concealed part of a 13-tile equivalent hand.
+	// If Ankan, tempPlayerHand is now 13 - 1 = 12 tiles (relative to before draw).
+	// Rinshan draw will bring it back to 13 for next discard.
+	// For wait check *after* Kan declaration but *before* Rinshan draw, the hand is smaller.
+	// This is complex. The most common rule is: Ankan is fine if the 4 tiles were already in hand.
+	// Shouminkan is fine if it adds to an existing Pon and doesn't "create" new waits.
+
+	// Simplified placeholder: Assume for now Ankan with drawn tile doesn't change waits if other 3 were a triplet.
+	// Assume Shouminkan adding drawn tile to existing Pon doesn't change waits.
+	// A full check is much more involved.
+	// return false // Placeholder: For now, assume common safe Kans don't change waits.
+	// This needs to be accurate:
+	newWaits := FindTenpaiWaits(tempPlayerHand, tempPlayerMelds)
+	
+	// 4. Compare newWaits with player.RiichiDeclaredWaits.
+	return !compareTileSlicesUnordered(player.RiichiDeclaredWaits, newWaits)
+}
+
+
+// CanDeclareKanOnDraw checks if the player can declare Ankan or Shouminkan using the drawn tile.
+// Assumes player.Hand includes the drawn tile (player.JustDrawnTile).
+func CanDeclareKanOnDraw(player *Player, drawnTile Tile, gs *GameState) (string, Tile) {
+	// Check for Suukaikan / Max Kans by player
+	numPlayerKans := 0; for _, m := range player.Melds { if strings.Contains(m.Type, "Kan") { numPlayerKans++ } }
+	if numPlayerKans >= 4 { return "", Tile{} } // Player cannot make a 5th Kan
+	if gs.TotalKansDeclaredThisRound >= 4 && !CheckSuukantsu(player) { // Suukaikan condition for abort
+		// This means 4 kans by multiple players. If a 5th kan is attempted by anyone, and rinshan fails, it's abort.
+		// This check is more about "is the game in a state where another Kan could trigger abort".
 	}
 
 	// Check for Ankan (4 identical tiles in hand including the draw)
-	countInHand := 0
-	for _, t := range player.Hand { // Hand includes drawn tile
-		if t.Suit == drawnTile.Suit && t.Value == drawnTile.Value {
-			countInHand++
-		}
+	countInHandForAnkan := 0
+	for _, t := range player.Hand { // player.Hand already includes drawnTile
+		if t.Suit == drawnTile.Suit && t.Value == drawnTile.Value { countInHandForAnkan++ }
 	}
-	if countInHand == 4 {
-		// Check if last drawable tile (prevents Kan if no Rinshan possible - though Dead Wall handles Rinshan count)
-		// Check if Riichi (cannot Ankan if it changes waits, unless allowed by ruleset)
-		// TODO: Implement wait change check for Riichi Ankan
+	if countInHandForAnkan == 4 {
+		if player.IsRiichi && checkWaitChangeForRiichiKan(player, gs, drawnTile, "Ankan") {
+			// gs.AddToGameLog(fmt.Sprintf("%s Ankan with drawn %s would change Riichi waits. Denied.", player.Name, drawnTile.Name))
+			return "", Tile{}
+		}
 		return "Ankan", drawnTile
 	}
 
 	// Check for Shouminkan (add drawn tile to existing Pon)
 	for _, meld := range player.Melds {
 		if meld.Type == "Pon" {
-			ponTile := meld.Tiles[0] // All tiles in Pon are the same type
+			ponTile := meld.Tiles[0]
 			if drawnTile.Suit == ponTile.Suit && drawnTile.Value == ponTile.Value {
-				// Check if Riichi (cannot Shouminkan if it changes waits, typically allowed if same tile type)
+				if player.IsRiichi && checkWaitChangeForRiichiKan(player, gs, drawnTile, "Shouminkan") {
+					// gs.AddToGameLog(fmt.Sprintf("%s Shouminkan with drawn %s would change Riichi waits. Denied.", player.Name, drawnTile.Name))
+					return "", Tile{}
+				}
 				return "Shouminkan", drawnTile
 			}
 		}
@@ -611,49 +571,35 @@ func CanDeclareKanOnDraw(player *Player, drawnTile Tile) (string, Tile) {
 	return "", Tile{}
 }
 
-// CanDeclareKanOnHand checks if the player can declare Ankan or Shouminkan using only tiles currently in hand/melds
-// (i.e., not immediately after drawing, but maybe after a call, or just before discarding).
+// CanDeclareKanOnHand checks for Ankan or Shouminkan using tiles currently in hand/melds (not necessarily just drawn).
 // `checkTile` is one representative tile from the potential Kan group.
-// Assumes player.Hand is in its current state (e.g., 13 tiles after call + discard prompt, or 14 before normal discard).
-func CanDeclareKanOnHand(player *Player, checkTile Tile) (string, Tile) {
-	// TODO: Check Ssuukantsu rule
-	numPlayerKans := 0
-	for _, m := range player.Melds {
-		if strings.Contains(m.Type, "Kan") {
-			numPlayerKans++
-		}
-	}
-	if numPlayerKans >= 4 {
-		return "", Tile{}
-	}
+func CanDeclareKanOnHand(player *Player, checkTile Tile, gs *GameState) (string, Tile) {
+	numPlayerKans := 0; for _, m := range player.Melds { if strings.Contains(m.Type, "Kan") { numPlayerKans++ } }
+	if numPlayerKans >= 4 { return "", Tile{} }
+	if gs.TotalKansDeclaredThisRound >= 4 && !CheckSuukantsu(player) { /* Potential Suukaikan */ }
 
 	// Check for Ankan (4 identical tiles currently in hand)
 	countInHand := 0
 	for _, t := range player.Hand {
-		if t.Suit == checkTile.Suit && t.Value == checkTile.Value {
-			countInHand++
-		}
+		if t.Suit == checkTile.Suit && t.Value == checkTile.Value { countInHand++ }
 	}
 	if countInHand == 4 {
-		// TODO: Check Riichi wait change rules if applicable
+		if player.IsRiichi && checkWaitChangeForRiichiKan(player, gs, checkTile, "Ankan") { return "", Tile{} }
 		return "Ankan", checkTile
 	}
 
 	// Check for Shouminkan (1 tile in hand + existing Pon)
-	hasTileInHand := false
+	hasTileInHandForShouminkan := false
 	for _, t := range player.Hand {
-		if t.Suit == checkTile.Suit && t.Value == checkTile.Value {
-			hasTileInHand = true
-			break
-		}
+		if t.Suit == checkTile.Suit && t.Value == checkTile.Value { hasTileInHandForShouminkan = true; break }
 	}
-	if hasTileInHand {
+	if hasTileInHandForShouminkan {
 		for _, meld := range player.Melds {
 			if meld.Type == "Pon" {
 				ponTile := meld.Tiles[0]
 				if checkTile.Suit == ponTile.Suit && checkTile.Value == ponTile.Value {
-					// TODO: Check Riichi wait change rules if applicable
-					return "Shouminkan", checkTile
+					if player.IsRiichi && checkWaitChangeForRiichiKan(player, gs, checkTile, "Shouminkan") { return "", Tile{} }
+					return "Shouminkan", checkTile // checkTile is the tile from hand to add
 				}
 			}
 		}
@@ -661,44 +607,26 @@ func CanDeclareKanOnHand(player *Player, checkTile Tile) (string, Tile) {
 	return "", Tile{}
 }
 
-// FindRiichiOptions iterates through a 14-tile hand and finds all discards
-// that result in a Tenpai state, returning the discard and resulting waits.
-// Assumes hand includes the drawn tile (14 tiles total).
+// FindRiichiOptions iterates through a 14-tile hand and finds all discards that result in Tenpai.
 func FindRiichiOptions(hand14 []Tile, melds []Meld) []RiichiOption {
 	options := []RiichiOption{}
-	if len(hand14) != HandSize+1 {
-		// Should be called with 14 tiles
-		return options
-	}
+	if len(hand14) != HandSize+1 { return options } // Must be 14 tiles (13 + draw)
 
-	// Ensure melds are only concealed (Ankan) for Riichi check validity context
-	for _, m := range melds {
-		if !m.IsConcealed {
-			return options // Cannot Riichi with open melds
-		}
-	}
+	isConcealedHand := true // Check if hand is truly concealed for Riichi
+	for _, m := range melds { if !m.IsConcealed { isConcealedHand = false; break } } // Ankans are concealed
+	if !isConcealedHand { return options }
 
-	// Iterate through each tile as a potential discard
 	for i := 0; i < len(hand14); i++ {
 		discardCandidate := hand14[i]
-		// Create temporary 13-tile hand
 		tempHand13 := make([]Tile, 0, HandSize)
-		for j, t := range hand14 {
-			if i != j {
-				tempHand13 = append(tempHand13, t)
-			}
-		}
-		sort.Sort(BySuitValue(tempHand13)) // Sort for consistent checks
+		for j, t := range hand14 { if i != j { tempHand13 = append(tempHand13, t) } }
+		// sort.Sort(BySuitValue(tempHand13)) // IsTenpai will sort
 
-		// Check if discarding this tile results in Tenpai
 		if IsTenpai(tempHand13, melds) {
-			// If Tenpai, find the waits
 			waits := FindTenpaiWaits(tempHand13, melds)
 			if len(waits) > 0 {
 				options = append(options, RiichiOption{
-					DiscardIndex: i,
-					DiscardTile:  discardCandidate,
-					Waits:        waits,
+					DiscardIndex: i, DiscardTile: discardCandidate, Waits: waits,
 				})
 			}
 		}
@@ -708,61 +636,124 @@ func FindRiichiOptions(hand14 []Tile, melds []Meld) []RiichiOption {
 
 // CanDeclareRiichi checks if the player can declare Riichi.
 func CanDeclareRiichi(player *Player, gs *GameState) (bool, []RiichiOption) {
-	options := []RiichiOption{} // Initialize empty slice
-	if player.IsRiichi {
-		return false, options // Already in Riichi
-	}
-	// Must be Menzenchin (concealed hand)
-	isConcealed := true
-	for _, m := range player.Melds {
-		// Only Ankan allowed for Riichi
-		if !m.IsConcealed && m.Type != "Ankan" {
-			isConcealed = false
-			break
-		}
-	}
-	if !isConcealed {
-		return false, options // Hand is open
-	}
-	// Must have >= 1000 points
-	if player.Score < 1000 {
-		return false, options // Not enough points
+	options := []RiichiOption{}
+	if player.IsRiichi { return false, options } // Already in Riichi
+
+	isConcealed := true // Hand must be concealed (only Ankans allowed as "melds")
+	for _, m := range player.Melds { if !m.IsConcealed { isConcealed = false; break } }
+	if !isConcealed { return false, options }
+
+	if player.Score < RiichiBet { return false, options } // Not enough points
+	if len(gs.Wall) < 4 { return false, options } // Not enough wall tiles for Riichi (Ippatsu, Ura)
+	if len(player.Hand) != HandSize+1 { // Must be holding 13 + drawn tile
+		// gs.AddToGameLog(fmt.Sprintf("Debug CanDeclareRiichi: %s hand size %d, expected %d", player.Name, len(player.Hand), HandSize+1))
+		return false, options
 	}
 
-// CheckKyuushuuKyuuhai checks if a hand qualifies for the Kyuushuu Kyuuhai abortive draw.
-// This is 9 or more unique terminal or honor tiles in the starting hand.
-func CheckKyuushuuKyuuhai(hand []Tile) bool {
-	if len(hand) != 13 { // Should be checked with the initial 13 tiles
-		return false
-	}
+	options = FindRiichiOptions(player.Hand, player.Melds)
+	return len(options) > 0, options // Can Riichi if any valid Tenpai discards found
+}
+
+// CheckKyuushuuKyuuhai (Nine Different Terminals/Honors on First Uninterrupted Draw).
+func CheckKyuushuuKyuuhai(hand []Tile, melds []Meld) bool {
+	// Condition: Player's first turn, no calls made by anyone yet, no melds by player.
+	// `main.go` checks these conditions (`!player.HasDrawnFirstTileThisRound && !gs.AnyCallMadeThisRound`).
+	if len(melds) > 0 { return false } // Must have no melds (implicit from no calls)
+	if len(hand) != 13 { return false } // Checked with the initial 13 tiles before first draw
 
 	uniqueTerminalsAndHonors := make(map[string]bool)
 	count := 0
-
 	for _, tile := range hand {
 		if IsTerminalOrHonor(tile) {
-			// Use tile.Name as a unique key for the tile type (e.g. "Man 1", "East Wind")
-			// This automatically handles duplicates of the same tile type (e.g. two "Man 1" tiles)
-			if !uniqueTerminalsAndHonors[tile.Name] {
-				uniqueTerminalsAndHonors[tile.Name] = true
+			// Use tile Name (or Suit+Value string) as key for uniqueness of *type*
+			key := fmt.Sprintf("%s-%d", tile.Suit, tile.Value) // Ensures 1m is different from 1p
+			if !uniqueTerminalsAndHonors[key] {
+				uniqueTerminalsAndHonors[key] = true
 				count++
 			}
 		}
 	}
 	return count >= 9
 }
-	// Must be >= 4 tiles left in the wall
-	if len(gs.Wall) < 4 {
-		return false, options // Not enough wall tiles left for potential Ippatsu/Ura Dora
-	}
-	// Must have 14 tiles before discard
-	if len(player.Hand) != HandSize+1 {
-		// fmt.Printf("Debug: CanDeclareRiichi incorrect hand size %d\n", len(player.Hand)) // Debug
-		return false, options // Must be holding 13 + drawn tile
-	}
-	// Check if any discard leads to Tenpai by finding options
-	options = FindRiichiOptions(player.Hand, player.Melds)
 
-	return len(options) > 0, options // Can Riichi if any valid options were found
+// --- Abortive Draw Condition Checks ---
 
+// CheckSsuufonRenda (Four Players Discard Same Wind on First Uninterrupted Turn).
+// gs.FirstTurnDiscards must be populated correctly.
+func CheckSsuufonRenda(gs *GameState) bool {
+	if gs.FirstTurnDiscardCount < 4 { return false } // Not all 4 players made their first discard yet
+	
+	firstDiscard := gs.FirstTurnDiscards[0] // Assumes gs.FirstTurnDiscards indexed by initial seat order
+	if firstDiscard.Suit != "Wind" { return false }
+
+	for i := 1; i < 4; i++ {
+		if gs.FirstTurnDiscards[i].Suit != "Wind" || gs.FirstTurnDiscards[i].Value != firstDiscard.Value {
+			return false // Not all were the same wind tile
+		}
+	}
+	gs.AddToGameLog("Ssuufon Renda condition met (4 same first wind discards).")
+	return true
+}
+
+// CheckSuuRiichi (Four Players Declare Riichi).
+// gs.DeclaredRiichiPlayerIndices map must be up to date.
+func CheckSuuRiichi(gs *GameState) bool {
+	count := 0
+	for _, declared := range gs.DeclaredRiichiPlayerIndices {
+		if declared { count++ }
+	}
+	if count == 4 {
+		gs.AddToGameLog("Suu Riichi condition met (4 players declared Riichi).")
+		return true
+	}
+	return false
+}
+
+// CheckSanchahou (Three Players Ron on the Same Discard).
+// gs.SanchahouRonners list must be populated by DiscardTile.
+func CheckSanchahou(gs *GameState) bool {
+	if len(gs.SanchahouRonners) >= 3 {
+		gs.AddToGameLog("Sanchahou condition met (3+ Ron declarations on same discard).")
+		return true
+	}
+	return false
+}
+
+// CheckSuukaikan (Four Kans by Different Players resulting in no more Rinshan tiles).
+// This function checks if the *conditions* for Suukaikan are met (4+ Kans by >=2 players).
+// The actual abortive draw happens if DrawRinshanTile then fails.
+func CheckSuukaikan(gs *GameState) bool {
+	if gs.TotalKansDeclaredThisRound < 4 { return false }
+
+	kansByPlayer := make(map[int]int) // Player index -> count of their Kans
+	playersMakingKans := 0
+	for playerIdx, p := range gs.Players {
+		playerKanCount := 0
+		for _, m := range p.Melds {
+			if strings.Contains(m.Type, "Kan") { playerKanCount++ }
+		}
+		if playerKanCount > 0 {
+			kansByPlayer[playerIdx] = playerKanCount
+			playersMakingKans++
+		}
+		if playerKanCount == 4 { // One player has 4 Kans
+			return false // This is SuuKANTSU (Yakuman), not Suukaikan abortive draw.
+		}
+	}
+
+	if gs.TotalKansDeclaredThisRound >= 4 && playersMakingKans >= 2 {
+		// gs.AddToGameLog("Suukaikan condition (4+ Kans by >=2 players) is met. Abort if next Rinshan fails.")
+		return true
+	}
+	return false
+}
+
+// CheckSuukantsu (Four Kans YAKUMAN by a single player).
+// This is a Yaku check, distinct from Suukaikan abortive draw.
+func CheckSuukantsu(player *Player) bool { // Note: This is the YAKU check
+	kanCount := 0
+	for _, meld := range player.Melds {
+		if strings.Contains(meld.Type, "Kan") { kanCount++ }
+	}
+	return kanCount == 4
 }

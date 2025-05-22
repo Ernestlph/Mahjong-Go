@@ -8,7 +8,6 @@ import (
 
 // FormatHandForDisplay formats a player's hand for terminal output (sorted).
 func FormatHandForDisplay(hand []Tile) string {
-	// Ensure sorted - create copy to avoid modifying original slice order if not intended
 	handCopy := make([]Tile, len(hand))
 	copy(handCopy, hand)
 	sort.Sort(BySuitValue(handCopy))
@@ -22,21 +21,17 @@ func FormatMeldsForDisplay(melds []Meld) string {
 	}
 	var displayMelds []string
 	for _, meld := range melds {
-		// Sort tiles within the meld for consistent display
 		sort.Sort(BySuitValue(meld.Tiles))
 		meldStr := fmt.Sprintf("%s: [", meld.Type)
 		tileNames := []string{}
 
-		// Show concealment for Ankan (typically ends face down)
 		if meld.Type == "Ankan" {
-			// Show ends face down, middle two face up
 			if len(meld.Tiles) == 4 {
 				tileNames = append(tileNames, meld.Tiles[0].Name+"(?)", meld.Tiles[1].Name, meld.Tiles[2].Name, meld.Tiles[3].Name+"(?)")
 			} else {
 				tileNames = TilesToNames(meld.Tiles)
-			} // Fallback
+			}
 		} else if meld.Type == "Shouminkan" || meld.Type == "Daiminkan" || meld.Type == "Pon" || meld.Type == "Chi" {
-			// Indicate which tile was called and from whom
 			tileNames = TilesToNames(meld.Tiles)
 			calledIdx := -1
 			for i, t := range meld.Tiles {
@@ -45,7 +40,7 @@ func FormatMeldsForDisplay(melds []Meld) string {
 				}
 			}
 			if calledIdx != -1 {
-				tileNames[calledIdx] = tileNames[calledIdx] + "*" // Mark called tile
+				tileNames[calledIdx] = tileNames[calledIdx] + "*"
 			}
 		} else {
 			tileNames = TilesToNames(meld.Tiles)
@@ -63,14 +58,11 @@ func FormatMeldsForDisplay(melds []Meld) string {
 // DisplayGameState outputs the current game state to the terminal.
 func DisplayGameState(gs *GameState) {
 	fmt.Println("\n=========================================")
-	fmt.Printf("Round: %s %d | Honba: %d | Riichi Sticks: %d\n", gs.PrevalentWind, gs.RoundNumber, gs.Honba, gs.RiichiSticks)
-	fmt.Printf("Wall Tiles: %d | Dead Wall Tiles: %d | Turn: %d\n", len(gs.Wall), DeadWallSize, gs.TurnNumber)
+	fmt.Printf("Round: %s %d (%d) | Honba: %d | Riichi Sticks: %d\n",
+		gs.PrevalentWind, gs.CurrentWindRoundNumber, gs.DealerRoundCount, gs.Honba, gs.RiichiSticks)
+	fmt.Printf("Wall Tiles: %d | Dead Wall Tiles: %d | Turn in Round: %d\n", len(gs.Wall), DeadWallSize, gs.TurnNumber)
 	fmt.Printf("Dora Indicators: %v\n", TilesToNames(gs.DoraIndicators))
-	// Kan Dora are included in DoraIndicators now
-	// if len(gs.KanDoraIndicators) > 0 { // Keep separate track if needed?
-	// 	fmt.Printf("Kan Dora Indicators: %v\n", TilesToNames(gs.KanDoraIndicators))
-	// }
-	if len(gs.UraDoraIndicators) > 0 { // Only show if revealed
+	if len(gs.UraDoraIndicators) > 0 {
 		fmt.Printf("Ura Dora Indicators: %v\n", TilesToNames(gs.UraDoraIndicators))
 	}
 	fmt.Println("--- Players ---")
@@ -78,32 +70,64 @@ func DisplayGameState(gs *GameState) {
 		marker := " "
 		if i == gs.CurrentPlayerIndex {
 			marker = ">"
-		} // Indicate current player
-		fmt.Printf("%s P%d %s (%s Wind): Score %d %s %s\n",
+		}
+		riichiStatus := If(player.IsRiichi, "[Riichi]", "")
+		if player.IsRiichi && player.DeclaredDoubleRiichi {
+			riichiStatus = "[D.Riichi]"
+		}
+		furitenStatus := If(player.IsFuriten, "[F]", "")
+		if player.IsPermanentRiichiFuriten {
+			furitenStatus = "[Perm.F]"
+		}
+
+		tenpaiStatus := ""
+		if gs.GamePhase == PhaseRoundEnd && gs.RoundWinner == nil { // Ryuukyoku
+			tenpaiStatus = If(player.IsTenpai, "[Tenpai]", "[Noten]")
+		}
+
+		fmt.Printf("%s P%d %s (%s Wind): Score %d %s %s %s\n",
 			marker, i+1, player.Name, player.SeatWind, player.Score,
-			If(player.IsRiichi, "[Riichi]", ""),
-			If(player.IsFuriten, "[Furiten]", ""),
+			riichiStatus, furitenStatus, tenpaiStatus,
 		)
-		// Don't show hand unless it's the current player or debugging
-		// if i == gs.CurrentPlayerIndex || true { // Show all hands for debugging
-		//    fmt.Printf("  Hand: %s\n", FormatHandForDisplay(player.Hand))
-		// }
 		fmt.Printf("  Melds: %s\n", FormatMeldsForDisplay(player.Melds))
-		fmt.Printf("  Discards: %v\n", TilesToNames(player.Discards))
+		if len(player.Discards) > 15 { // Truncate long discard list for display
+			fmt.Printf("  Discards: %v ... (last 5: %v)\n", TilesToNames(player.Discards[:10]), TilesToNames(player.Discards[len(player.Discards)-5:]))
+		} else {
+			fmt.Printf("  Discards: %v\n", TilesToNames(player.Discards))
+		}
+		if player.PaoSourcePlayerIndex != -1 {
+			fmt.Printf("  (Is Pao for P%d's Yakuman)\n", player.PaoSourcePlayerIndex+1)
+		}
 	}
-	// fmt.Printf("Full Discard Pile: %v\n", TilesToNames(gs.DiscardPile)) // Can be long
 	if gs.LastDiscard != nil {
-		fmt.Printf("Last Discard: %s\n", gs.LastDiscard.Name)
+		fmt.Printf("Last Discard: %s (by P%d)\n", gs.LastDiscard.Name, gs.CurrentPlayerIndex+1) // CurrentPlayerIndex is discarder before NextPlayer()
+	}
+	if len(gs.GameLog) > 0 {
+		fmt.Printf("Last Log: %s\n", gs.GameLog[len(gs.GameLog)-1])
 	}
 	fmt.Println("=========================================")
 }
 
-// DisplayPlayerState shows details for a specific player (Hand, Melds, Score, Status).
+// DisplayPlayerState shows details for a specific player.
 func DisplayPlayerState(player *Player) {
 	fmt.Printf("--- %s's State ---\n", player.Name)
-	fmt.Printf("  Hand: %s\n", FormatHandForDisplay(player.Hand)) // Always show hand here
+	fmt.Printf("  Hand: %s (%d tiles)\n", FormatHandForDisplay(player.Hand), len(player.Hand))
+	if player.JustDrawnTile != nil {
+		fmt.Printf("  Just Drawn: %s\n", player.JustDrawnTile.Name)
+	}
 	fmt.Printf("  Melds: %s\n", FormatMeldsForDisplay(player.Melds))
-	fmt.Printf("  Score: %d %s %s\n", player.Score, If(player.IsRiichi, "[Riichi]", ""), If(player.IsFuriten, "[Furiten]", ""))
+	riichiStatus := If(player.IsRiichi, "[Riichi]", "")
+	if player.IsRiichi && player.DeclaredDoubleRiichi {
+		riichiStatus = "[D.Riichi]"
+	}
+	furitenStatus := If(player.IsFuriten, "[Furiten]", "")
+	if player.IsPermanentRiichiFuriten {
+		furitenStatus = "[Perm.Furiten]"
+	}
+	fmt.Printf("  Score: %d %s %s\n", player.Score, riichiStatus, furitenStatus)
+	if len(player.RiichiDeclaredWaits) > 0 {
+		fmt.Printf("  Riichi Waits: %v\n", TilesToNames(player.RiichiDeclaredWaits))
+	}
 }
 
 // TilesToNames converts a slice of Tiles to a slice of their Names.
@@ -114,7 +138,7 @@ func TilesToNames(tiles []Tile) []string {
 			names[i] = "??"
 		} else {
 			names[i] = t.Name
-		} // Handle empty tile case
+		}
 	}
 	return names
 }

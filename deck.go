@@ -22,9 +22,12 @@ func GenerateDeck() []Tile {
 	// Numbered tiles (1-9 for Man, Pin, Sou)
 	for _, suit := range suits {
 		for value := 1; value <= 9; value++ {
-			hasRed := suit != "Sou" && value == 5 // Man and Pin have red 5s
+			// Man 5, Pin 5, Sou 5 each have one red version.
+			// Total of 4 of each number tile. One of the 5s is red.
+			isFive := (value == 5)
 			for i := 0; i < 4; i++ {
-				isRed := hasRed && i == 0 // Make the first '5' tile red
+				// Make the first '5' tile of Man, Pin, Sou red
+				isRed := isFive && i == 0
 				tileName := fmt.Sprintf("%s %d", suit, value)
 				if isRed {
 					tileName = "Red " + tileName
@@ -57,7 +60,6 @@ func GenerateDeck() []Tile {
 		panic(fmt.Sprintf("Internal error: Generated deck size is %d, expected %d", len(deck), TotalTiles))
 	}
 
-	// Shuffle the deck using the seeded random source
 	rand.Shuffle(len(deck), func(i, j int) {
 		deck[i], deck[j] = deck[j], deck[i]
 	})
@@ -66,15 +68,12 @@ func GenerateDeck() []Tile {
 }
 
 // GetAllPossibleTiles returns a sorted list of all 34 unique tile types (ignoring duplicates/reds).
-// Useful for Tenpai checks.
 func GetAllPossibleTiles() []Tile {
 	uniqueTiles := []Tile{}
-	// Use a predictable way to generate one of each type
 	suits := []string{"Man", "Pin", "Sou"}
 	winds := []string{"East", "South", "West", "North"}
 	dragons := []string{"White", "Green", "Red"}
-
-	idCounter := -1 // Use negative IDs to distinguish from real deck IDs if needed
+	idCounter := -1
 
 	for _, suit := range suits {
 		for value := 1; value <= 9; value++ {

@@ -1,723 +1,567 @@
-// main.go
 package main
 
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"sort"
+
+	// "strings" // Not directly used in this version of main.go
 	"time"
 )
 
-// Constants  <<<<<<<<<<<<<<<<<<<<< HERE THEY ARE
-const (
-	HandSize        = 13
-	DeadWallSize    = 14  // Total tiles in the dead wall
-	RinshanTiles    = 4   // Number of replacement tiles for Kans in the dead wall
-	MaxRevealedDora = 5   // Max number of Dora indicators (1 initial + 4 Kan) that can be revealed
-	TotalTiles      = 136 // 4 * (9*3 + 7)
-)
-
-// <<<<<<<<<<<<<<<<<<<<< END OF DEFINITIONS
-
-// ... (Constants remain the same) ...
+// Constants are now in types.go
 
 func main() {
 	rand.Seed(time.Now().UnixNano()) // Seed random number generator once
-	fmt.Println("Starting Riichi Mahjong Game (Simplified Core Rules)")
+	fmt.Println("Starting Riichi Mahjong Game")
+	gsLog := []string{} // Game-level log, if needed beyond gs.GameLog
 
-	// Initialize game state
-	playerNames := []string{"Player 1 (You)", "Player 2", "Player 3", "Player 4"} // Assume Player 1 is human
-	gameState := NewGameState(playerNames) // NewGameState sets PhaseDealing initially
+	playerNames := []string{"Player 1 (You)", "Player 2 (AI)", "Player 3 (AI)", "Player 4 (AI)"}
+	gameState := NewGameState(playerNames) // NewGameState sets PhaseDealing, PrevalentWind, etc.
 
 	// Main Game Loop - continues as long as the game is not over
 	for gameState.GamePhase != PhaseGameEnd {
 
-		// If starting a new round or after round processing, ensure hands are dealt.
-		// NewGameState sets PhaseDealing. DealInitialHands sets PhasePlayerTurn.
-		// After round processing, if not PhaseGameEnd, we need to ensure we enter turn processing.
-		if gameState.GamePhase == PhaseDealing || gameState.GamePhase == PhaseRoundEnd { // PhaseRoundEnd means previous round finished, setup next
-			if gameState.GamePhase == PhaseRoundEnd { // If previous round just ended, game not over yet
-				// Reset relevant flags or ensure DealInitialHands does it.
-				// The round end processing block already handles resetting player/game state
-				// and preparing for a new deal by setting up Wall, DeadWall.
-				// It also calls RevealInitialDoraIndicator and DealInitialHands.
-				// So, if we reached here from RoundEnd processing and it's not GameEnd,
-				// DealInitialHands would have been called already by the RoundEnd block.
-				// Let's simplify: DealInitialHands should be called if we are in a state
-				// that precedes active player turns.
-				// The round end block already calls DealInitialHands.
-				// So, if we are here and it's PhaseRoundEnd, it means the round processing block
-				// decided to continue the game, and hands are ready.
-				// DealInitialHands sets GamePhase to PhasePlayerTurn.
-				// If it's PhaseDealing (initial game start), call DealInitialHands.
-				if gameState.GamePhase == PhaseDealing { // Initial game start
-					fmt.Println("Dealing initial hands for the first round...")
-					gameState.DealInitialHands()
-				}
-				// If it was PhaseRoundEnd, the round end processing logic should have called DealInitialHands
-				// and set the phase to PhasePlayerTurn if the game is to continue.
-				// If it's still PhaseRoundEnd here, something is wrong, or game should end.
-				if gameState.GamePhase == PhaseRoundEnd {
-					fmt.Println("Error: Game stuck in PhaseRoundEnd after processing. Forcing Game End.");
-					gameState.GamePhase = PhaseGameEnd;
-					break; // Exit main game loop
-				}
-
-			} else if gameState.GamePhase == PhaseDealing { // Only for the very first deal
-				gameState.DealInitialHands()
-			}
+		// --- New Round Setup ---
+		if gameState.GamePhase == PhaseDealing {
+			// This block is for the very start of a new round.
+			// setupNewRoundDeck (called by NewGameState or end of previous round) prepares Wall, DeadWall, Dora.
+			// DealInitialHands deals tiles and sets GamePhase to PhasePlayerTurn.
+			gameState.DealInitialHands()
+			gameState.AddToGameLog(fmt.Sprintf("--- Round %s %d (%d of Wind) Starting ---", gameState.PrevalentWind, gameState.RoundNumber, gameState.DealerRoundCount))
+			// fmt.Printf("\n--- Round %s %d (%d of Wind, Dealer Round %d) Starting ---\n",
+			// gameState.PrevalentWind, gameState.CurrentWindRoundNumber, gameState.RoundNumber, gameState.DealerRoundCount)
 		}
 
-
-		// Inner loop for a single round's turns
+		// --- Player Turn Loop (Inner loop for a single round's turns) ---
 		// This loop runs as long as it's a player's turn and the round/game hasn't ended.
-		// Note: The original loop condition was effectively this inner loop.
-		// The player turn logic (draw, discard, calls, win checks) will set
-		// gameState.GamePhase to PhaseRoundEnd if the round concludes.
-		// The outer loop (`for gameState.GamePhase != PhaseGameEnd`) will then catch this,
-		// execute the round end processing, and then either terminate or start a new round.
-
-		// The following is the player turn logic, which should only run if GamePhase is PlayerTurn
-		if gameState.GamePhase == PhasePlayerTurn {
+		for gameState.GamePhase == PhasePlayerTurn {
 			currentPlayer := gameState.Players[gameState.CurrentPlayerIndex]
-			isHumanPlayer := gameState.CurrentPlayerIndex == 0 // Assuming player 0 is human
+			isHumanPlayer := gameState.CurrentPlayerIndex == 0
 
-		// Reset flags at the start of each player's turn
-		gameState.IsChankanOpportunity = false
-		gameState.IsRinshanWin = false 
-		// IsHouteiDiscard is set specifically when the last tile is drawn and then discarded.
-		// It should be reset if the round continues beyond that specific discard without a win.
-		// For safety, reset it here. If it's a Houtei discard turn, it will be set to true later.
-		gameState.IsHouteiDiscard = false
-
-
-		DisplayGameState(gameState) // Show state at start of turn
-
-		// --- Kyuushuu Kyuuhai Check (before draw) ---
-		// Conditions: Player's first turn, no calls made, within first set of turns.
-		// Player.Hand will have 13 tiles at this point.
-		if !currentPlayer.HasDrawnFirstTileThisRound && !gameState.AnyCallMadeThisRound && gameState.TurnNumber < len(gameState.Players) {
-			if CheckKyuushuuKyuuhai(currentPlayer.Hand) {
-				kyuushuuDeclared := false
-				if isHumanPlayer {
-					fmt.Println("Your hand qualifies for Kyuushuu Kyuuhai (9+ unique terminal/honor tiles).")
-					if GetPlayerChoice(gameState.InputReader, "Declare Kyuushuu Kyuuhai for an abortive draw? (y/n): ") {
-						kyuushuuDeclared = true
-					}
-				} else {
-					// AI always declares Kyuushuu Kyuuhai if conditions are met
-					fmt.Printf("%s's hand qualifies for Kyuushuu Kyuuhai.\n", currentPlayer.Name)
-					kyuushuuDeclared = true
-				}
-
-				if kyuushuuDeclared {
-					fmt.Printf("%s declares Kyuushuu Kyuuhai! Round ends in an abortive draw.\n", currentPlayer.Name)
-					gameState.GamePhase = PhaseRoundEnd
-					// TODO: Handle Honba increment for abortive draws if applicable by ruleset
-					break // End the current round
-				}
-			}
-		}
-
-		// --- Draw Phase ---
-		fmt.Printf("\n--- %s's Turn (%s Wind) ---\n", currentPlayer.Name, currentPlayer.SeatWind)
-
-		// Check for Haitei condition (last tile from wall)
-		isHaiteiDraw := len(gameState.Wall) == 1 // If 1 tile left, this draw will be Haitei
-
-		drawnTile, wallNowEmpty := gameState.DrawTile() // wallNowEmpty is true if wall was emptied by this draw
-		currentPlayer.HasDrawnFirstTileThisRound = true // Player has drawn their first tile
-
-		if wallNowEmpty && !isHaiteiDraw { // Wall became empty unexpectedly (e.g. error in logic)
-			fmt.Println("\nWall is empty! Round ends in a draw (Ryuukyoku).")
-			gameState.GamePhase = PhaseRoundEnd 
-			break
-		}
-		fmt.Printf("%s draws: %s\n", currentPlayer.Name, drawnTile.Name) 
-		if isHaiteiDraw {
-			fmt.Println("This is the last tile from the wall (Haitei).")
-		}
-
-
-		// Show hand only *after* draw for human player
-		if isHumanPlayer {
-			// DisplayPlayerState(currentPlayer) // Called later before discard choice
-		}
-
-		// --- Action Phase (Tsumo, Kan on Draw) ---
-		canTsumo := CanDeclareTsumo(currentPlayer, gameState)
-		possibleKanType, kanTargetTile := CanDeclareKanOnDraw(currentPlayer, drawnTile)
-
-		actionTaken := false
-		if canTsumo {
-			if isHumanPlayer {
-				// Display hand *before* Tsumo choice
-				DisplayPlayerState(currentPlayer)
-				if GetPlayerChoice(gameState.InputReader, "Declare TSUMO? (y/n): ") {
-					HandleWin(gameState, currentPlayer, drawnTile, true)
-					actionTaken = true
-				}
-			} else {
-				fmt.Printf("%s declares TSUMO!\n", currentPlayer.Name)
-				HandleWin(gameState, currentPlayer, drawnTile, true)
-				actionTaken = true
-			}
-		}
-
-		// Check for Kan only if Tsumo wasn't declared
-		if !actionTaken && possibleKanType != "" {
-			if isHumanPlayer {
-				// Display hand *before* Kan choice
-				DisplayPlayerState(currentPlayer)
-				if GetPlayerChoice(gameState.InputReader, fmt.Sprintf("Declare %s with %s? (y/n): ", possibleKanType, kanTargetTile.Name)) {
-					HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType)
-					actionTaken = true // Kan action handles the next step
-				}
-			} else {
-				// Basic AI: Always Kan if possible? (Maybe add some logic later)
-				// fmt.Printf("(%s could declare %s, skipping for AI)\n", currentPlayer.Name, possibleKanType) // AI skips Kan for simplicity now
-				// AI Decides to Kan (example)
-				fmt.Printf("%s declares %s!\n", currentPlayer.Name, possibleKanType)
-				HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType) // Pass gs
-				actionTaken = true
-			}
-		}
-
-		if actionTaken {
-			// If Tsumo or Kan occurred, the turn structure changes or ends.
-			if gameState.GamePhase == PhaseRoundEnd || gameState.GamePhase == PhaseGameEnd {
-				break
-			}
-			continue // Kan handler will manage the next discard prompt or turn ended with Tsumo
-		}
-
-		// --- Discard Phase ---
-		// Check Riichi possibilities FIRST
-		canRiichi, riichiOptions := CanDeclareRiichi(currentPlayer, gameState) // Gets bool and options
-		discardIndex := -1                                                     // Initialize discard index
-
-		riichiDeclaredSuccessfully := false // Flag to track if Riichi was handled
-
-		if isHumanPlayer {
-			// Display hand state before any discard choice (Riichi or normal)
-			DisplayPlayerState(currentPlayer)
-
-			if canRiichi {
-				// Present Riichi options
-				chosenOptionIndex, choiceMade := GetPlayerRiichiChoice(gameState.InputReader, riichiOptions)
-
-				if choiceMade {
-					// Player chose a Riichi option
-					selectedOption := riichiOptions[chosenOptionIndex]
-					discardIndex = selectedOption.DiscardIndex // Get the index to discard
-
-					// Attempt Riichi declaration
-					if HandleRiichiAction(gameState, currentPlayer, discardIndex) {
-						riichiDeclaredSuccessfully = true // Riichi was declared and discard happened
-						// HandleRiichiAction calls DiscardTile, which handles next steps
-						// Check if game ended due to Ron on Riichi discard
-						if gameState.GamePhase == PhaseRoundEnd || gameState.GamePhase == PhaseGameEnd {
-							break
-						}
-						// continue // Turn logic handled by DiscardTile called within HandleRiichiAction
-					} else {
-						// Riichi failed validation within HandleRiichiAction (e.g., chosen discard was wrong - safety check)
-						fmt.Println("Riichi declaration failed validation. Proceeding with normal discard.")
-						// Fall back to normal discard choice
-						discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
-					}
-				} else {
-					// Player cancelled Riichi choice
-					fmt.Println("Proceeding with normal discard.")
-					discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
-				}
-			} else {
-				// Cannot Riichi, just get normal discard
-				discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
-			}
-		} else { // AI Logic
-			fmt.Printf("(%s thinking...)\n", currentPlayer.Name)
-			if currentPlayer.IsRiichi {
-				// AI is already in Riichi - must discard drawn tile unless Kan
-				// Kan was handled earlier. Find index of drawn tile.
-				// Assuming drawn tile is last after sort (may need better tracking)
-				if len(currentPlayer.Hand) == HandSize+1 {
-					discardIndex = len(currentPlayer.Hand) - 1
-				} else {
-					fmt.Println("Error: AI in Riichi but hand size isn't 14?")
-					discardIndex = 0 // Fallback
-				}
-			} else { // AI not in Riichi
-				if canRiichi { // AI *could* declare Riichi
-					// Basic AI: Always Riichi if possible? Choose first option?
-					fmt.Printf("(%s can Riichi, AI chooses to Riichi!)\n", currentPlayer.Name)
-					chosenOption := riichiOptions[0] // AI picks first option
-					discardIndex = chosenOption.DiscardIndex
-					if HandleRiichiAction(gameState, currentPlayer, discardIndex) {
-						riichiDeclaredSuccessfully = true
-						if gameState.GamePhase == PhaseRoundEnd || gameState.GamePhase == PhaseGameEnd {
-							break
-						}
-						// continue // Handled by DiscardTile within HandleRiichiAction
-					} else {
-						fmt.Println("Error: AI Riichi failed validation?")
-						discardIndex = len(currentPlayer.Hand) - 1 // Fallback: discard drawn
-					}
-				} else {
-					// AI cannot Riichi, basic discard: drawn tile
-					if len(currentPlayer.Hand) == HandSize+1 {
-						discardIndex = len(currentPlayer.Hand) - 1 // Index of drawn tile after sort?
-					} else {
-						fmt.Println("Error: AI not in Riichi but hand size isn't 14?")
-						discardIndex = 0 // Fallback
-					}
-				}
-			}
-			// Safety check for AI discard index
-			if !riichiDeclaredSuccessfully && (discardIndex < 0 || discardIndex >= len(currentPlayer.Hand)) {
-				fmt.Printf("Error: AI calculated invalid discard index %d (Hand Size %d). Defaulting to 0.\n", discardIndex, len(currentPlayer.Hand))
-				if len(currentPlayer.Hand) > 0 {
-					discardIndex = 0
-				} else {
-					discardIndex = -1 /* No tiles? Error */
-				}
-			}
-		} // End AI Logic
-
-		// Perform the discard *only if* it wasn't handled by Riichi declaration
-		if !riichiDeclaredSuccessfully && discardIndex != -1 {
-			// If this discard is after the Haitei tile was drawn, it's a Houtei discard.
-			if isHaiteiDraw { // isHaiteiDraw means the drawnTile was the last one.
-				gameState.IsHouteiDiscard = true
-				fmt.Println("This discard is Houtei (last discard of the game).")
-			}
-
-			// DiscardTile handles calls, Furiten update, and turn advancement
-			_, gameShouldEnd := DiscardTile(gameState, currentPlayer, discardIndex)
-			currentPlayer.HasMadeFirstDiscardThisRound = true
-
-			// Update IsFirstGoAround after the first discard of each player in the initial set of turns
-			// A simple proxy: if TurnNumber (which increments in DiscardTile) reaches number of players -1,
-			// it means all players have had one turn (0, 1, 2, 3 for 4 players).
-			// This should happen *after* the current player's discard is fully processed by DiscardTile.
-			// TurnNumber is 0-indexed for the round's turns.
-			// If TurnNumber is 3 (4th discard of the round), first go-around is done.
-			if gameState.IsFirstGoAround && gameState.TurnNumber >= (len(gameState.Players)-1) {
-				// This logic might be too simple if calls interrupt the first go-around.
-				// AnyCallMadeThisRound will also set IsFirstGoAround to false more reliably.
-				// However, for a natural first go-around without calls:
-				// gameState.IsFirstGoAround = false; // This is one way to mark end of natural first round.
-				// Let's rely on AnyCallMadeThisRound and a more explicit check for Renhou/Chihou context.
-				// The Yaku checks use IsFirstGoAround, which is primarily falsified by calls.
-				// The HasMadeFirstDiscardThisRound flag on player is more direct for Renhou/Chihou.
-			}
-			
-			if gameShouldEnd {
-				// Ron occurred on the normal discard (could be Houtei)
-				break // End the main loop
-			}
-		} else if !riichiDeclaredSuccessfully && discardIndex == -1 {
-			fmt.Println("Error: No valid discard index determined.")
-			gameState.GamePhase = PhaseRoundEnd
-			break
-		}
-
-		// Check for end conditions again
-		// If it was a Haitei draw and no win occurred on Tsumo or subsequent Houtei discard, it's Ryuukyoku.
-		if isHaiteiDraw && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
-			// No one won on Haitei Tsumo or Houtei Ron
-			fmt.Println("\nLast tile drawn and discarded with no win. Round ends in a draw (Ryuukyoku).")
-			gameState.GamePhase = PhaseRoundEnd
-			gameState.RoundWinner = nil // Ensure draw state for Honba/Renchan logic
-			// Nagashi Mangan Check for Haitei Ryuukyoku
-			for _, p := range gameState.Players {
-				if isNagashi, nagashiName, _ := checkNagashiMangan(p, gameState); isNagashi {
-					fmt.Printf("!!! %s achieves %s! (Further scoring TBD) !!!\n", p.Name, nagashiName)
-					// TODO: Handle Nagashi Mangan payment logic here or in a dedicated scoring phase.
-					// Nagashi Mangan usually means the player gets Mangan points from others.
-					// This might override normal Tenpai/Notenpai payments for this player.
-				}
-			}
-			break
-		}
-		// Also, a general check if wall somehow emptied and game didn't end (e.g. after calls)
-		if wallNowEmpty && len(gameState.Wall) == 0 && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
-			// This condition implies the wall was empty AFTER the draw, and no win occurred.
-			// Redundant if isHaiteiDraw handles it, but a safety.
-			fmt.Println("\nWall is empty after player's turn! Round ends in a draw (Ryuukyoku).")
-			gameState.GamePhase = PhaseRoundEnd
-			gameState.RoundWinner = nil // Ensure draw state for Honba/Renchan logic
-			// Nagashi Mangan Check for general Ryuukyoku
-			for _, p := range gameState.Players {
-				if isNagashi, nagashiName, _ := checkNagashiMangan(p, gameState); isNagashi {
-					fmt.Printf("!!! %s achieves %s! (Further scoring TBD) !!!\n", p.Name, nagashiName)
-				}
-			}
-			break
-		}
-
-
-		// Small delay for non-human players
-		if !isHumanPlayer && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
-			time.Sleep(500 * time.Millisecond)
-		}
-
-	} // End of inner loop for player turns (terminates when PhaseRoundEnd or PhaseGameEnd)
-
-	// --- Round End Processing ---
-	if gameState.GamePhase == PhaseRoundEnd {
-		fmt.Println("\n--- Round End Processing ---")
-
-		// Check for game end conditions (e.g. player score < 0, or specific round limits like South 4)
-		gameShouldActuallyEnd := false
-		for _, p := range gameState.Players {
-			if p.Score < 0 {
-				fmt.Printf("Player %s has a negative score (%d). Game Over!\n", p.Name, p.Score)
-				gameShouldActuallyEnd = true
-				break
-			}
-		}
-		// TODO: Add more game end conditions (e.g., end of South 4, if not dealer and not top, etc.)
-		// Example: if gameState.PrevalentWind == "South" && gameState.RoundNumber > 4 { gameShouldActuallyEnd = true }
-
-		if gameShouldActuallyEnd {
-			gameState.GamePhase = PhaseGameEnd
-		} else {
-			fmt.Println("Preparing for next round...")
-
-			dealerAtRoundStart := gameState.CurrentPlayerIndex // Who was dealer for the round that just ended
-			isDealerWin := false
-			isDraw := gameState.RoundWinner == nil
-
-			if !isDraw && gameState.Players[dealerAtRoundStart] == gameState.RoundWinner {
-				isDealerWin = true
-			}
-
-			// Renchan: Dealer wins or any draw (including Kyuushuu, Ryuukyoku)
-			if isDealerWin || isDraw {
-				fmt.Println("Dealer is retained (Renchan) or round was a draw.")
-				gameState.Honba++
-				// CurrentPlayerIndex for next round remains dealerAtRoundStart
-				gameState.CurrentPlayerIndex = dealerAtRoundStart
-			} else { // Non-dealer win: Dealer changes, Honba resets
-				fmt.Println("Non-dealer win. Dealer changes.")
-				gameState.Honba = 0 
-				gameState.CurrentPlayerIndex = (dealerAtRoundStart + 1) % len(gameState.Players)
-				gameState.RoundNumber++ // Increment round number 
-				
-				// Update SeatWinds for all players based on new dealer
-				newDealerForNextRound := gameState.CurrentPlayerIndex
-				winds := []string{"East", "South", "West", "North"}
-				fmt.Printf("New dealer for the next round will be %s.\n", gameState.Players[newDealerForNextRound].Name)
-				for i := 0; i < len(gameState.Players); i++ {
-					seatWindIndex := (i - newDealerForNextRound + len(gameState.Players)) % len(gameState.Players)
-					gameState.Players[i].SeatWind = winds[seatWindIndex]
-				}
-				fmt.Printf("All players' seat winds updated. New dealer %s is %s Wind.\n", 
-					gameState.Players[newDealerForNextRound].Name, gameState.Players[newDealerForNextRound].SeatWind)
-			}
-
-			fmt.Printf("Honba counters for next round: %d\n", gameState.Honba)
-			fmt.Printf("Riichi sticks on table (carried over): %d\n", gameState.RiichiSticks)
-
-			// Reset round-specific player flags and states
-			for _, player := range gameState.Players {
-				player.Hand = []Tile{} // Clear hand (will be replaced by new deal)
-				player.IsRiichi = false
-				player.RiichiTurn = -1
-				player.IsIppatsu = false
-				player.DeclaredDoubleRiichi = false
-				player.HasMadeFirstDiscardThisRound = false
-				player.HasDrawnFirstTileThisRound = false
-				player.Discards = []Tile{} 
-				player.Melds = []Meld{}    // Melds are cleared between rounds
-			}
-
-			// Reset game state flags for the new round
-			gameState.LastDiscard = nil
-			gameState.DoraIndicators = []Tile{}
-			gameState.UraDoraIndicators = []Tile{}
-			gameState.AnyCallMadeThisRound = false
-			gameState.IsFirstGoAround = true
-			gameState.TurnNumber = 0
-			gameState.DiscardPile = []Tile{} 
-			gameState.RoundWinner = nil      // Reset round winner tracker for the new round
-
-			// The main game loop will handle starting the new round:
-			// It will call DealInitialHands() which shuffles, deals, reveals Dora, and sets GamePhase to PlayerTurn.
-			// For this to work, GamePhase must not be PhaseGameEnd.
-			// If we are continuing, DealInitialHands will set it up.
-			// No need to explicitly set PhaseDealing here if the outer loop handles it.
-			fmt.Println("\n--- Setup for New Round Complete ---")
-		}
-	} // End of Round End Processing
-
-			// ... (The entire player turn logic from the original main.go from line 36 down to the original end of the player turn loop)
-			// This includes: Reset flags, DisplayGameState, Kyuushuu Check, Draw Phase, Action Phase, Discard Phase, End Checks
-			// Ensure all `break` statements within this player turn logic correctly terminate this phase of play
-			// and lead to the Round End Processing block.
-			// If any action sets gameState.GamePhase = PhaseRoundEnd, this inner block of logic will complete,
-			// and the outer loop (`for gameState.GamePhase != PhaseGameEnd`) will then execute the
-			// Round End Processing block.
-
-			// Reset flags at the start of each player's turn
+			// Reset turn-specific flags for the current player's action sequence
 			gameState.IsChankanOpportunity = false
 			gameState.IsRinshanWin = false
-			gameState.IsHouteiDiscard = false
+			// IsHouteiDiscard is set specifically when the Haitei discard happens
+			// It should be false at the start of a "normal" turn.
+			// If a turn *becomes* the Houtei discard turn, DiscardTile will set it.
+			// To be safe, ensure it's false unless explicitly set by Haitei discard logic.
+			if !gameState.IsHouteiDiscard { // Only reset if not already set this turn by Haitei logic
+				gameState.IsHouteiDiscard = false
+			}
+			gameState.SanchahouRonners = []*Player{} // Clear for current discard check
 
-			DisplayGameState(gameState) // Show state at start of turn
+			if isHumanPlayer || true { // Always display for debugging for now
+				DisplayGameState(gameState)
+			}
 
 			// --- Kyuushuu Kyuuhai Check (before draw) ---
-			if !currentPlayer.HasDrawnFirstTileThisRound && !gameState.AnyCallMadeThisRound && gameState.TurnNumber < len(gameState.Players) {
-				if CheckKyuushuuKyuuhai(currentPlayer.Hand) {
+			// Conditions: Player's first turn of the round, no calls made by anyone yet in the round.
+			if !currentPlayer.HasDrawnFirstTileThisRound && !gameState.AnyCallMadeThisRound &&
+				gameState.TurnNumber < len(gameState.Players) { // Ensures it's within the first cycle of turns
+
+				if CheckKyuushuuKyuuhai(currentPlayer.Hand, currentPlayer.Melds) { // Pass melds to ensure no open melds
 					kyuushuuDeclared := false
 					if isHumanPlayer {
 						fmt.Println("Your hand qualifies for Kyuushuu Kyuuhai (9+ unique terminal/honor tiles).")
 						if GetPlayerChoice(gameState.InputReader, "Declare Kyuushuu Kyuuhai for an abortive draw? (y/n): ") {
 							kyuushuuDeclared = true
 						}
-					} else {
-						fmt.Printf("%s's hand qualifies for Kyuushuu Kyuuhai.\n", currentPlayer.Name)
-						kyuushuuDeclared = true // AI always declares
+					} else { // AI always declares
+						// gameState.AddToGameLog(fmt.Sprintf("%s's hand qualifies for Kyuushuu Kyuuhai.", currentPlayer.Name))
+						kyuushuuDeclared = true
 					}
 
 					if kyuushuuDeclared {
-						fmt.Printf("%s declares Kyuushuu Kyuuhai! Round ends in an abortive draw.\n", currentPlayer.Name)
+						gameState.AddToGameLog(fmt.Sprintf("%s declares Kyuushuu Kyuuhai! Round ends in an abortive draw.", currentPlayer.Name))
+						// fmt.Printf("%s declares Kyuushuu Kyuuhai! Round ends in an abortive draw.\n", currentPlayer.Name)
 						gameState.GamePhase = PhaseRoundEnd
-						gameState.RoundWinner = nil // Ensure it's a draw
-						// Honba increment for abortive draw handled in round end processing block
+						gameState.RoundWinner = nil // Mark as draw
+						// Honba usually increments for abortive draws. This is handled in Round End processing.
+						break // Exit player turn loop, proceed to Round End processing
 					}
 				}
 			}
-			if gameState.GamePhase == PhaseRoundEnd { continue } // Skip to next iteration of outer loop if round ended
+			if gameState.GamePhase != PhasePlayerTurn {
+				break
+			} // If Kyuushuu ended round, skip rest of turn logic
 
 			// --- Draw Phase ---
-			fmt.Printf("\n--- %s's Turn (%s Wind) ---\n", currentPlayer.Name, currentPlayer.SeatWind)
-			isHaiteiDraw := len(gameState.Wall) == 1
-			drawnTile, wallNowEmpty := gameState.DrawTile()
-			currentPlayer.HasDrawnFirstTileThisRound = true
-
-			if wallNowEmpty && !isHaiteiDraw {
-				fmt.Println("\nWall is empty! Round ends in a draw (Ryuukyoku).")
-				gameState.GamePhase = PhaseRoundEnd
-				gameState.RoundWinner = nil // Ensure it's a draw
+			if isHumanPlayer {
+				fmt.Printf("\n--- %s's Turn (%s Wind) ---\n", currentPlayer.Name, currentPlayer.SeatWind)
+			} else {
+				// gameState.AddToGameLog(fmt.Sprintf("--- %s's Turn (%s Wind) ---", currentPlayer.Name, currentPlayer.SeatWind))
 			}
-			if gameState.GamePhase == PhaseRoundEnd { continue }
 
-			fmt.Printf("%s draws: %s\n", currentPlayer.Name, drawnTile.Name)
+			isHaiteiDraw := len(gameState.Wall) == 1 // If 1 tile left, this draw makes the wall empty (Haitei)
+			drawnTile, wallNowEmptyAfterDraw := gameState.DrawTile()
+			currentPlayer.HasDrawnFirstTileThisRound = true // Player has now drawn their first tile
+
+			if wallNowEmptyAfterDraw && !isHaiteiDraw { // Wall emptied unexpectedly
+				gameState.AddToGameLog("Wall empty unexpectedly after draw! Round ends in Ryuukyoku.")
+				// fmt.Println("\nWall is empty! Round ends in a draw (Ryuukyoku).")
+				gameState.GamePhase = PhaseRoundEnd
+				gameState.RoundWinner = nil
+				break // Exit player turn loop
+			}
+			gameState.AddToGameLog(fmt.Sprintf("%s draws: %s", currentPlayer.Name, drawnTile.Name))
+			// fmt.Printf("%s draws: %s\n", currentPlayer.Name, drawnTile.Name)
 			if isHaiteiDraw {
-				fmt.Println("This is the last tile from the wall (Haitei).")
+				gameState.AddToGameLog("This is the Haitei tile (last from wall).")
+				// fmt.Println("This is the last tile from the wall (Haitei).")
 			}
 
 			// --- Action Phase (Tsumo, Kan on Draw) ---
-			canTsumo := CanDeclareTsumo(currentPlayer, gameState)
-			possibleKanType, kanTargetTile := CanDeclareKanOnDraw(currentPlayer, drawnTile)
-			actionTaken := false
+			actionTakenThisSegment := false
 
-			if canTsumo {
+			if CanDeclareTsumo(currentPlayer, gameState) {
+				tsumoConfirm := !isHumanPlayer // AI default: Tsumo if possible
 				if isHumanPlayer {
-					DisplayPlayerState(currentPlayer)
-					if GetPlayerChoice(gameState.InputReader, "Declare TSUMO? (y/n): ") {
-						HandleWin(gameState, currentPlayer, drawnTile, true) // Sets GamePhase to RoundEnd
-						actionTaken = true
-					}
-				} else {
-					fmt.Printf("%s declares TSUMO!\n", currentPlayer.Name)
+					DisplayPlayerState(currentPlayer) // Show hand before Tsumo choice
+					tsumoConfirm = GetPlayerChoice(gameState.InputReader, "Declare TSUMO? (y/n): ")
+				}
+				if tsumoConfirm {
+					// gameState.AddToGameLog(fmt.Sprintf("%s declares TSUMO!", currentPlayer.Name))
+					// fmt.Printf("%s declares TSUMO!\n", currentPlayer.Name)
 					HandleWin(gameState, currentPlayer, drawnTile, true) // Sets GamePhase to RoundEnd
-					actionTaken = true
+					actionTakenThisSegment = true
 				}
 			}
+			if gameState.GamePhase != PhasePlayerTurn {
+				break
+			} // If Tsumo ended round
 
-			if !actionTaken && possibleKanType != "" {
-				if isHumanPlayer {
-					DisplayPlayerState(currentPlayer)
-					if GetPlayerChoice(gameState.InputReader, fmt.Sprintf("Declare %s with %s? (y/n): ", possibleKanType, kanTargetTile.Name)) {
-						HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType)
-						actionTaken = true
+			// Check for Kan on Draw (only if Tsumo was not declared or declined)
+			if !actionTakenThisSegment {
+				possibleKanType, kanTargetTile := CanDeclareKanOnDraw(currentPlayer, drawnTile, gameState)
+				if possibleKanType != "" {
+					kanConfirm := !isHumanPlayer // AI decision for Kan
+					if isHumanPlayer {
+						DisplayPlayerState(currentPlayer) // Show hand before Kan choice
+						kanConfirm = GetPlayerChoice(gameState.InputReader, fmt.Sprintf("Declare %s with %s? (y/n): ", possibleKanType, kanTargetTile.Name))
+					} else { // AI Kan logic
+						// AI: Kan if not Riichi, or if Riichi and waits don't change
+						if !currentPlayer.IsRiichi || (currentPlayer.IsRiichi && !checkWaitChangeForRiichiKan(currentPlayer, gameState, kanTargetTile, possibleKanType)) {
+							// AI confirms safe Kan
+						} else {
+							kanConfirm = false // AI skips unsafe Kan
+							gameState.AddToGameLog(fmt.Sprintf("AI %s skips %s with %s (unsafe for Riichi).", currentPlayer.Name, possibleKanType, kanTargetTile.Name))
+						}
 					}
-				} else {
-					fmt.Printf("%s declares %s!\n", currentPlayer.Name, possibleKanType)
-					HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType)
-					actionTaken = true
+
+					if kanConfirm {
+						// gameState.AddToGameLog(fmt.Sprintf("%s declares %s with %s.", currentPlayer.Name, possibleKanType, kanTargetTile.Name))
+						// fmt.Printf("%s declares %s!\n", currentPlayer.Name, possibleKanType)
+						HandleKanAction(gameState, currentPlayer, kanTargetTile, possibleKanType)
+						actionTakenThisSegment = true // Kan action handles next step (Rinshan, then PromptDiscard or win)
+					}
 				}
 			}
+			if gameState.GamePhase != PhasePlayerTurn {
+				break
+			} // If Kan led to win and ended round
 
-			if actionTaken { // If Tsumo or Kan occurred
-				if gameState.GamePhase == PhaseRoundEnd || gameState.GamePhase == PhaseGameEnd {
-					continue // To outer loop for round/game end processing
-				}
-				// If Kan, turn might continue for same player (discard after Kan)
-				// The HandleKanAction and PromptDiscard logic handles this by recalling PromptDiscard
-				// or if win, sets PhaseRoundEnd.
-				// If it was just a Kan and no win, the turn continues for this player, so `continue` the inner player turn logic.
-				// This needs to be handled carefully. If HandleKanAction leads to a discard prompt,
-				// that prompt will then call DiscardTile, which can end the round.
-				// The `continue` here means "skip the rest of *this specific turn's code block* and re-evaluate player turn".
-				// This is generally correct if HandleKanAction changes player or requires new input.
-				// For simplicity, let's assume HandleKanAction itself correctly manages the flow,
-				// including setting PhaseRoundEnd if a win occurs during Kan (Rinshan).
-				// If just a Kan, the same player discards, so the player turn logic should effectively repeat for discard.
-				// This implies PromptDiscard will be called by HandleKanAction.
-				// So, `continue` to the next iteration of the *player turn processing part of the code* is not what we want.
-				// We want the current player to continue their turn (discard).
-				// The current structure where PromptDiscard is called by HandleKanAction handles this.
-				// So if actionTaken is true, and game hasn't ended, the turn proceeds.
-				// No special `continue` for the player turn loop is needed here if Kan path manages its own discards.
-			}
-			if gameState.GamePhase == PhaseRoundEnd { continue }
-
-
-			// --- Discard Phase --- (Only if no win/Kan ended turn above)
-			if !actionTaken {
+			// --- Discard Phase ---
+			// If actionTakenThisSegment is true (due to Kan on draw that didn't end game),
+			// HandleKanAction would have called PromptDiscard, which calls DiscardTile.
+			// So, this block is for when no Tsumo/Kan happened on draw, or if a Kan happened but didn't result in a win or further required actions *before* a normal discard.
+			// The `PromptDiscard` called by `HandleKanAction` is the key here.
+			// If `actionTakenThisSegment` is true, it means the turn flow is managed by `HandleKanAction` (which calls `PromptDiscard`).
+			// If `actionTakenThisSegment` is false, we proceed to the normal discard logic here.
+			if !actionTakenThisSegment {
 				canRiichi, riichiOptions := CanDeclareRiichi(currentPlayer, gameState)
 				discardIndex := -1
 				riichiDeclaredSuccessfully := false
 
 				if isHumanPlayer {
-					DisplayPlayerState(currentPlayer)
+					DisplayPlayerState(currentPlayer) // Show hand before any discard choice
 					if canRiichi {
 						chosenOptionIndex, choiceMade := GetPlayerRiichiChoice(gameState.InputReader, riichiOptions)
 						if choiceMade {
 							selectedOption := riichiOptions[chosenOptionIndex]
-							discardIndex = selectedOption.DiscardIndex
-							if HandleRiichiAction(gameState, currentPlayer, discardIndex) { // Calls DiscardTile
-								riichiDeclaredSuccessfully = true
-							} else { // Riichi failed validation
+							discardIndex = selectedOption.DiscardIndex // This is index in the 14-tile hand
+							if HandleRiichiAction(gameState, currentPlayer, discardIndex) {
+								riichiDeclaredSuccessfully = true // Riichi and discard happened
+							} else { // Riichi validation failed (e.g., chosen discard wrong)
+								gameState.AddToGameLog("Riichi declaration failed internal validation. Proceeding with normal discard.")
+								// fmt.Println("Riichi declaration failed validation. Proceeding with normal discard.")
 								discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
 							}
-						} else { // Player cancelled Riichi
+						} else { // Player cancelled Riichi choice
+							gameState.AddToGameLog(fmt.Sprintf("%s cancelled Riichi. Proceeding with normal discard.", currentPlayer.Name))
+							// fmt.Println("Proceeding with normal discard.")
 							discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
 						}
-					} else { // Cannot Riichi
+					} else { // Cannot Riichi, just get normal discard
 						discardIndex = GetPlayerDiscardChoice(gameState.InputReader, currentPlayer)
 					}
-				} else { // AI Logic
-					fmt.Printf("(%s thinking...)\n", currentPlayer.Name)
-					if currentPlayer.IsRiichi { // AI already in Riichi
-						if len(currentPlayer.Hand) == HandSize+1 { discardIndex = len(currentPlayer.Hand) - 1 } else { discardIndex = 0 } // Should be drawn tile
+				} else { // AI Logic for discard
+					// gameState.AddToGameLog(fmt.Sprintf("AI %s thinking for discard...", currentPlayer.Name))
+					if currentPlayer.IsRiichi {
+						foundDrawn := false
+						if currentPlayer.JustDrawnTile != nil { // Must discard drawn tile if Riichi
+							for i, t := range currentPlayer.Hand {
+								if t.ID == currentPlayer.JustDrawnTile.ID {
+									discardIndex = i
+									foundDrawn = true
+									break
+								}
+							}
+						}
+						if !foundDrawn {
+							gameState.AddToGameLog(fmt.Sprintf("Error: AI %s (Riichi) couldn't find JustDrawnTile for discard. Discarding last.", currentPlayer.Name))
+							if len(currentPlayer.Hand) > 0 {
+								discardIndex = len(currentPlayer.Hand) - 1
+							} else {
+								discardIndex = -1
+							}
+						}
 					} else { // AI not in Riichi
 						if canRiichi {
-							chosenOption := riichiOptions[0] // AI picks first Riichi option
+							gameState.AddToGameLog(fmt.Sprintf("AI %s can Riichi, chooses first option.", currentPlayer.Name))
+							// fmt.Printf("(%s can Riichi, AI chooses to Riichi!)\n", currentPlayer.Name)
+							chosenOption := riichiOptions[0]
 							discardIndex = chosenOption.DiscardIndex
 							if HandleRiichiAction(gameState, currentPlayer, discardIndex) {
 								riichiDeclaredSuccessfully = true
-							} else { // AI Riichi failed validation?
-								discardIndex = len(currentPlayer.Hand) - 1 // Fallback: discard drawn
+							} else {
+								gameState.AddToGameLog(fmt.Sprintf("Error: AI %s Riichi failed validation. Discarding last.", currentPlayer.Name))
+								// fmt.Println("Error: AI Riichi failed validation?")
+								if len(currentPlayer.Hand) > 0 {
+									discardIndex = len(currentPlayer.Hand) - 1
+								} else {
+									discardIndex = -1
+								}
 							}
-						} else { // AI cannot Riichi
-							if len(currentPlayer.Hand) == HandSize+1 { discardIndex = len(currentPlayer.Hand) - 1 } else { discardIndex = 0 } // Discard drawn
+						} else { // AI cannot Riichi, basic discard: JustDrawnTile
+							foundDrawn := false
+							if currentPlayer.JustDrawnTile != nil {
+								for i, t := range currentPlayer.Hand {
+									if t.ID == currentPlayer.JustDrawnTile.ID {
+										discardIndex = i
+										foundDrawn = true
+										break
+									}
+								}
+							}
+							if !foundDrawn {
+								if len(currentPlayer.Hand) > 0 {
+									discardIndex = len(currentPlayer.Hand) - 1
+								} else {
+									discardIndex = -1
+								}
+							}
 						}
 					}
-					// Safety for AI discard index
 					if !riichiDeclaredSuccessfully && (discardIndex < 0 || discardIndex >= len(currentPlayer.Hand)) {
-						if len(currentPlayer.Hand) > 0 { discardIndex = 0 } else { discardIndex = -1 }
+						gameState.AddToGameLog(fmt.Sprintf("Error: AI %s calculated invalid discard index %d. Defaulting to 0.", currentPlayer.Name, discardIndex))
+						// fmt.Printf("Error: AI calculated invalid discard index %d (Hand Size %d). Defaulting to 0.\n", discardIndex, len(currentPlayer.Hand))
+						if len(currentPlayer.Hand) > 0 {
+							discardIndex = 0
+						} else {
+							discardIndex = -1
+						}
 					}
-				}
+				} // End AI Logic
 
+				// Perform the discard *only if* it wasn't handled by Riichi declaration and index is valid
 				if !riichiDeclaredSuccessfully && discardIndex != -1 {
-					if isHaiteiDraw { // Mark if this is a Houtei discard
-						gameState.IsHouteiDiscard = true
-						fmt.Println("This discard is Houtei (last discard of the game).")
+					if isHaiteiDraw { // isHaiteiDraw means the drawnTile was the last one from wall
+						gameState.IsHouteiDiscard = true // This discard is Houtei
+						gameState.AddToGameLog("This discard is Houtei Raoyui opportunity.")
+						// fmt.Println("This discard is Houtei (last discard of the game).")
 					}
-					_, _ = DiscardTile(gameState, currentPlayer, discardIndex) // DiscardTile can set PhaseRoundEnd on Ron
-					currentPlayer.HasMadeFirstDiscardThisRound = true
+					_, gameShouldEnd := DiscardTile(gameState, currentPlayer, discardIndex) // DiscardTile handles calls, Furiten, turn advancement
+					if gameShouldEnd {                                                      // Ron occurred on the discard
+						break // Exit player turn loop
+					}
 				} else if !riichiDeclaredSuccessfully && discardIndex == -1 {
-					fmt.Println("Error: No valid discard index determined.")
-					gameState.GamePhase = PhaseRoundEnd; gameState.RoundWinner = nil // Error, treat as draw
+					gameState.AddToGameLog(fmt.Sprintf("Error: No valid discard index determined for %s after choices.", currentPlayer.Name))
+					// fmt.Println("Error: No valid discard index determined.")
+					gameState.GamePhase = PhaseRoundEnd
+					gameState.RoundWinner = nil // Treat as error/draw
+					break
 				}
-			} // End of discard phase logic block
-			if gameState.GamePhase == PhaseRoundEnd { continue }
+			} // End of discard phase logic block (if !actionTakenThisSegment)
+			if gameState.GamePhase != PhasePlayerTurn {
+				break
+			} // If Riichi action or DiscardTile ended round
 
-
-			// Check for end conditions again (Haitei/Wall Empty Ryuukyoku)
-			if isHaiteiDraw && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
-				fmt.Println("\nLast tile drawn and discarded with no win. Round ends in a draw (Ryuukyoku).")
-				gameState.GamePhase = PhaseRoundEnd; gameState.RoundWinner = nil
-			}
-			if wallNowEmpty && len(gameState.Wall) == 0 && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
-				fmt.Println("\nWall is empty after player's turn! Round ends in a draw (Ryuukyoku).")
-				gameState.GamePhase = PhaseRoundEnd; gameState.RoundWinner = nil
-			}
-			if gameState.GamePhase == PhaseRoundEnd { continue }
-
-
-			// Small delay for non-human players
-			if !isHumanPlayer && gameState.GamePhase != PhaseRoundEnd && gameState.GamePhase != PhaseGameEnd {
-				time.Sleep(100 * time.Millisecond) // Shorter delay
+			// --- Post-Discard Checks (Abortive Draws, Ryuukyoku) ---
+			// Check for Suu Riichi completion (abort if 4th Riichi discard not Ronned)
+			if CheckSuuRiichi(gameState) {
+				// Abort only if the discard *just made* by the 4th Riichi player was not Ronned.
+				// DiscardTile would have set GamePhase to RoundEnd if Ron occurred.
+				if gameState.GamePhase == PhasePlayerTurn {
+					gameState.AddToGameLog("Suu Riichi! Round aborts as 4th Riichi player's discard was not Ronned.")
+					// fmt.Println("Suu Riichi! Round aborts as 4th Riichi player's discard was not Ronned.")
+					gameState.GamePhase = PhaseRoundEnd
+					gameState.RoundWinner = nil
+					break
+				}
 			}
 
-			// If no call/win ended the turn, DiscardTile would have called gs.NextPlayer()
-			// The turn processing for the current player is over. Loop will check phase and continue.
-		} // End of `if gameState.GamePhase == PhasePlayerTurn`
+			// Ryuukyoku due to Haitei/Houtei with no win on that last action
+			if isHaiteiDraw && gameState.GamePhase == PhasePlayerTurn {
+				gameState.AddToGameLog("Haitei/Houtei passed with no win. Round ends in Ryuukyoku.")
+				// fmt.Println("\nLast tile drawn and discarded with no win. Round ends in a draw (Ryuukyoku).")
+				gameState.GamePhase = PhaseRoundEnd
+				gameState.RoundWinner = nil
+				// Nagashi Mangan check now happens in Round End Processing.
+				break
+			}
+			// General wall empty check (safety, should be covered by Haitei)
+			if wallNowEmptyAfterDraw && len(gameState.Wall) == 0 && gameState.GamePhase == PhasePlayerTurn {
+				gameState.AddToGameLog("Wall empty after player's turn actions. Round ends in Ryuukyoku.")
+				// fmt.Println("\nWall is empty after player's turn! Round ends in a draw (Ryuukyoku).")
+				gameState.GamePhase = PhaseRoundEnd
+				gameState.RoundWinner = nil
+				break
+			}
 
-		// --- Round End Processing (moved from the previous diff, executed after each turn loop or if round ends prematurely) ---
+			// Small delay for AI players if game continues
+			if !isHumanPlayer && gameState.GamePhase == PhasePlayerTurn {
+				time.Sleep(100 * time.Millisecond) // Shortened for faster simulation
+			}
+		} // End of Player Turn Loop
+
+		// --- Round End Processing ---
 		if gameState.GamePhase == PhaseRoundEnd {
-			fmt.Println("\n--- Round End Processing ---")
+			gameState.AddToGameLog(fmt.Sprintf("--- Round %s %d (%d for Dealer, %d Wind Round) Ended ---",
+				gameState.PrevalentWind, gameState.RoundNumber, gameState.DealerRoundCount, gameState.CurrentWindRoundNumber))
+			// fmt.Println("\n--- Round End Processing ---")
 
+			nagashiWinner := (*Player)(nil)
+			if gameState.RoundWinner == nil { // Exhaustive draw or abortive draw
+				for _, p := range gameState.Players {
+					if isNagashi, nagashiName, _ := checkNagashiMangan(p, gameState); isNagashi {
+						gameState.AddToGameLog(fmt.Sprintf("!!! %s achieves %s !!!", p.Name, nagashiName))
+						// fmt.Printf("!!! %s achieves %s! (Scoring to be refined) !!!\n", p.Name, nagashiName)
+						nagashiWinner = p
+						// Simulate Mangan Tsumo for Nagashi winner.
+						isWinnerDealer := (gameState.Players[gameState.DealerIndexThisRound] == p)
+						// Create a dummy winning tile for payment calculation, Yaku calc will be overridden.
+						dummyAgari := Tile{Suit: "Special", Value: 1, Name: "Nagashi"}
+						payment := CalculatePointPayment(5, 30, isWinnerDealer, true, gameState.Honba, gameState.RiichiSticks) // Mangan
+
+						// Pao logic for Nagashi is not standard. Direct transfer:
+						nagashiTotalPayment := 0
+						if isWinnerDealer {
+							nagashiTotalPayment = payment.TsumoNonDealerPay * (len(gameState.Players) - 1)
+						} else {
+							nagashiTotalPayment = payment.TsumoDealerPay + payment.TsumoNonDealerPay*(len(gameState.Players)-2)
+						}
+						// Transfer from others to Nagashi winner
+						for _, otherP := range gameState.Players {
+							if otherP == p {
+								continue
+							}
+							var amountToPay int
+							if isWinnerDealer {
+								amountToPay = payment.TsumoNonDealerPay
+							} else {
+								if gameState.Players[gameState.DealerIndexThisRound] == otherP {
+									amountToPay = payment.TsumoDealerPay
+								} else {
+									amountToPay = payment.TsumoNonDealerPay
+								}
+							}
+							otherP.Score -= amountToPay
+							gameState.AddToGameLog(fmt.Sprintf("%s pays %d to %s for Nagashi Mangan.", otherP.Name, amountToPay, p.Name))
+						}
+						p.Score += nagashiTotalPayment
+						p.Score += gameState.RiichiSticks * RiichiBet // Nagashi winner gets Riichi sticks
+						gameState.RiichiSticks = 0
+
+						gameState.RoundWinner = p // Nagashi Mangan is a form of win.
+						break                     // Only one Nagashi Mangan.
+					}
+				}
+			}
+
+			// Tenpai/Notenpai for Ryuukyoku (if no winner from Nagashi etc.)
+			if gameState.RoundWinner == nil { // Still a draw after Nagashi check (or no Nagashi)
+				for _, p := range gameState.Players {
+					p.IsTenpai = IsTenpai(p.Hand, p.Melds)
+					gameState.AddToGameLog(fmt.Sprintf("%s is %s at Ryuukyoku.", p.Name, If(p.IsTenpai, "Tenpai", "Noten")))
+				}
+				HandleNotenBappu(gameState) // Handles point transfers for Noten Bappu
+				if isHumanPlayer || true {
+					DisplayGameState(gameState)
+				} // Show Tenpai statuses and score changes
+			}
+
+			// --- Game End Conditions Check ---
 			gameShouldActuallyEnd := false
 			for _, p := range gameState.Players {
 				if p.Score < 0 {
-					fmt.Printf("Player %s has a negative score (%d). Game Over!\n", p.Name, p.Score)
-					gameShouldActuallyEnd = true; break
+					gameState.AddToGameLog(fmt.Sprintf("Player %s has busted (score: %d)! Game Over.", p.Name, p.Score))
+					// fmt.Printf("Player %s has a negative score (%d). Game Over!\n", p.Name, p.Score)
+					gameShouldActuallyEnd = true
+					break
 				}
 			}
-			// TODO: Add more game end conditions (e.g., end of South 4)
+			// Hanchan End Logic
+			if !gameShouldActuallyEnd {
+				// Check if the game should end based on rounds completed (e.g., South 4)
+				// gameState.RoundNumber is the round counter within the current PrevalentWind (1-4)
+				// gameState.CurrentWindRoundNumber is 1 for East, 2 for South, etc.
+				isLastProgrammedWind := gameState.CurrentWindRoundNumber >= gameState.MaxWindRounds
+				isLastDealerTurnOfFinalWind := gameState.RoundNumber >= 4 // Current dealer completed their 4th turn as dealer for this wind
+
+				if isLastProgrammedWind && isLastDealerTurnOfFinalWind {
+					dealerPlayer := gameState.Players[gameState.DealerIndexThisRound] // Dealer of the round that just ended
+					dealerWins := gameState.RoundWinner == dealerPlayer
+					dealerTenpaiAtDraw := (gameState.RoundWinner == nil && dealerPlayer.IsTenpai)
+
+					// Standard: Game ends after last programmed round unless dealer wins/tenpai AND is not top.
+					// Simplified: Game ends after South 4 (or equivalent final wind round).
+					// Agari-yame/Tenpai-yame (dealer can choose to end if top) is advanced.
+					if !dealerWins && !dealerTenpaiAtDraw {
+						// Dealer did not win or was not tenpai (if draw), so no renchan on the final turn. Game ends.
+						gameState.AddToGameLog(fmt.Sprintf("Final programmed round (%s %d) completed. Dealer did not win/Tenpai. Game Over.", gameState.PrevalentWind, gameState.RoundNumber))
+						gameShouldActuallyEnd = true
+					} else {
+						// Dealer won or was tenpai. Normally, they could choose to continue (if not top) or end.
+						// For simplicity, if it's the absolute last round (e.g., South 4), it ends.
+						// If rules allowed for West round etc., then Renchan would continue.
+						gameState.AddToGameLog(fmt.Sprintf("Final programmed round (%s %d) dealer Renchan. Game ends (standard).", gameState.PrevalentWind, gameState.RoundNumber))
+						gameShouldActuallyEnd = true
+					}
+				}
+			}
 
 			if gameShouldActuallyEnd {
 				gameState.GamePhase = PhaseGameEnd
-			} else {
-				fmt.Println("Preparing for next round...")
-				dealerAtRoundStart := gameState.CurrentPlayerIndex 
-				isDealerWin := false
-				isDraw := gameState.RoundWinner == nil
-				if !isDraw && gameState.Players[dealerAtRoundStart] == gameState.RoundWinner { isDealerWin = true }
+			} else { // Prepare for Next Round
+				gameState.AddToGameLog("Preparing for next round setup...")
+				currentRoundDealerPlayer := gameState.Players[gameState.DealerIndexThisRound] // Dealer of the round that just ended
+				isDealerWin := gameState.RoundWinner == currentRoundDealerPlayer
+				isDealerTenpaiAtDraw := (gameState.RoundWinner == nil && currentRoundDealerPlayer.IsTenpai)
 
-				if isDealerWin || isDraw { // Renchan
-					fmt.Println("Dealer is retained (Renchan) or round was a draw.")
+				// Renchan Logic for Honba & Dealer Position
+				if isDealerWin || isDealerTenpaiAtDraw { // Dealer Renchan
 					gameState.Honba++
-					gameState.CurrentPlayerIndex = dealerAtRoundStart
+					// DealerIndexThisRound remains the same.
+					gameState.DealerRoundCount++ // This dealer's consecutive rounds as dealer.
+					gameState.AddToGameLog(fmt.Sprintf("Dealer %s retained (Renchan). Honba to %d. Dealer's %d round as dealer.",
+						currentRoundDealerPlayer.Name, gameState.Honba, gameState.DealerRoundCount))
 				} else { // Dealer changes
-					fmt.Println("Non-dealer win. Dealer changes.")
-					gameState.Honba = 0
-					gameState.CurrentPlayerIndex = (dealerAtRoundStart + 1) % len(gameState.Players)
-					gameState.RoundNumber++
-					newDealerForNextRound := gameState.CurrentPlayerIndex
-					winds := []string{"East", "South", "West", "North"}
-					fmt.Printf("New dealer for the next round will be %s.\n", gameState.Players[newDealerForNextRound].Name)
-					for i := 0; i < len(gameState.Players); i++ {
-						seatWindIndex := (i - newDealerForNextRound + len(gameState.Players)) % len(gameState.Players)
-						gameState.Players[i].SeatWind = winds[seatWindIndex]
+					// If dealer is Noten at Ryuukyoku, Honba still increments even if dealership passes.
+					if gameState.RoundWinner == nil && !currentRoundDealerPlayer.IsTenpai {
+						gameState.Honba++
+						gameState.AddToGameLog(fmt.Sprintf("Dealer %s Noten at Ryuukyoku. Honba to %d. Dealership passes.",
+							currentRoundDealerPlayer.Name, gameState.Honba))
+					} else { // Non-dealer win
+						gameState.Honba = 0 // Reset Honba
+						gameState.AddToGameLog("Non-dealer win. Honba reset.")
 					}
-					fmt.Printf("All players' seat winds updated. New dealer %s is %s Wind.\n", gameState.Players[newDealerForNextRound].Name, gameState.Players[newDealerForNextRound].SeatWind)
+
+					gameState.DealerIndexThisRound = (gameState.DealerIndexThisRound + 1) % len(gameState.Players)
+					gameState.DealerRoundCount = 1 // New dealer starts their 1st round count.
+
+					// Advance Round Number (within the current Prevalent Wind)
+					gameState.RoundNumber++ // This is the round number for the current Prevalent Wind (e.g., East 1, East 2 ...)
+					if gameState.RoundNumber > 4 {
+						gameState.RoundNumber = 1          // Reset to 1 for the new Prevalent Wind
+						gameState.CurrentWindRoundNumber++ // This tracks which wind it is (1=E, 2=S)
+						switch gameState.PrevalentWind {
+						case "East":
+							gameState.PrevalentWind = "South"
+						case "South":
+							gameState.PrevalentWind = "West" // If MaxWindRounds allows
+						case "West":
+							gameState.PrevalentWind = "North" // If MaxWindRounds allows
+						case "North": // Game usually ends or loops based on complex rules
+							if gameState.MaxWindRounds > 4 {
+								gameState.PrevalentWind = "East"
+							} else { /* Game should have ended */
+							}
+						}
+						gameState.AddToGameLog(fmt.Sprintf("Prevalent Wind advances to %s.", gameState.PrevalentWind))
+					}
+					gameState.AddToGameLog(fmt.Sprintf("Dealer changes to %s. Wind Round: %s. Dealer turn in wind: %d. Their dealer streak: %d.",
+						gameState.Players[gameState.DealerIndexThisRound].Name, gameState.PrevalentWind, gameState.RoundNumber, gameState.DealerRoundCount))
 				}
-				fmt.Printf("Honba counters for next round: %d\n", gameState.Honba)
-				fmt.Printf("Riichi sticks on table (carried over): %d\n", gameState.RiichiSticks)
 
-				for _, player := range gameState.Players {
-					player.Hand = []Tile{}; player.IsRiichi = false; player.RiichiTurn = -1; player.IsIppatsu = false
-					player.DeclaredDoubleRiichi = false; player.HasMadeFirstDiscardThisRound = false
-					player.HasDrawnFirstTileThisRound = false; player.Discards = []Tile{}; player.Melds = []Meld{}
+				// Update Seat Winds based on new DealerIndexThisRound for the *next* round
+				winds := []string{"East", "South", "West", "North"}
+				for i := 0; i < len(gameState.Players); i++ {
+					seatWindIndex := (i - gameState.DealerIndexThisRound + len(gameState.Players)) % len(gameState.Players)
+					gameState.Players[i].SeatWind = winds[seatWindIndex]
 				}
-				gameState.LastDiscard = nil; gameState.DoraIndicators = []Tile{}; gameState.UraDoraIndicators = []Tile{}
-				gameState.AnyCallMadeThisRound = false; gameState.IsFirstGoAround = true; gameState.TurnNumber = 0
-				gameState.DiscardPile = []Tile{}; gameState.RoundWinner = nil
+				// gameState.AddToGameLog("Seat winds updated for new round.")
 
-				fmt.Println("Dealing new hands for the next round...")
-				newDeck := GenerateDeck()
-				gameState.Wall = newDeck[:TotalTiles-DeadWallSize]
-				gameState.DeadWall = newDeck[TotalTiles-DeadWallSize:]
-				gameState.RevealInitialDoraIndicator()
-				gameState.DealInitialHands() // This sets GamePhase to PhasePlayerTurn
+				// Reset round-specific player flags
+				for _, p := range gameState.Players {
+					p.Hand = []Tile{}
+					p.Discards = []Tile{}
+					p.Melds = []Meld{}
+					p.IsRiichi = false
+					p.RiichiTurn = -1
+					p.IsIppatsu = false
+					p.DeclaredDoubleRiichi = false
+					p.HasMadeFirstDiscardThisRound = false
+					p.HasDrawnFirstTileThisRound = false
+					p.JustDrawnTile = nil
+					p.IsFuriten = false
+					p.IsPermanentRiichiFuriten = false
+					p.DeclinedRonOnTurn = -1
+					p.DeclinedRonTileID = -1
+					p.RiichiDeclaredWaits = []Tile{}
+					p.IsTenpai = false
+					p.PaoSourcePlayerIndex = -1
+					p.PaoTargetFor = nil
+					p.HasHadDiscardCalledThisRound = false
+				}
+				// Reset round-specific game state flags
+				gameState.LastDiscard = nil
+				// DoraIndicators and UraDoraIndicators are cleared and re-revealed by setupNewRoundDeck
+				gameState.AnyCallMadeThisRound = false
+				gameState.IsFirstGoAround = true
+				gameState.TurnNumber = 0 // Reset turn counter for the new round (discards in round)
+				gameState.DeclaredRiichiPlayerIndices = make(map[int]bool)
+				gameState.TotalKansDeclaredThisRound = 0
+				gameState.FirstTurnDiscardCount = 0
+				gameState.FirstTurnDiscards = [4]Tile{} // Reset for Ssuufon Renda
+				gs.SanchahouRonners = []*Player{}
+				gameState.RoundWinner = nil
 
-				fmt.Println("\n--- New Round Starting ---")
+				gameState.setupNewRoundDeck()      // Sets up Wall, DeadWall, initial Dora
+				gameState.GamePhase = PhaseDealing // Ready for next round's deal
 			}
-		} // End of Round End Processing block
-	} // End Main Game Loop (`for gameState.GamePhase != PhaseGameEnd`)
+		} // End Round End Processing
+	} // End Main Game Loop
 
-	// --- Final Game Outcome Display (if game truly ended) ---
+	// --- Final Game Outcome ---
 	if gameState.GamePhase == PhaseGameEnd {
-		fmt.Println("\n--- Final Game State ---")
-		DisplayGameState(gameState)
-		// TODO: Display final scores, overall winner, etc.
+		fmt.Println("\n\n--- FINAL GAME RESULTS ---")
+		gsLog = append(gsLog, "--- FINAL GAME RESULTS ---") // Game-level log
+		DisplayGameState(gameState)                         // Show final state with scores
+
+		// Sort players by score for final display
+		finalScores := make([]*Player, len(gameState.Players))
+		copy(finalScores, gameState.Players)
+		sort.Slice(finalScores, func(i, j int) bool {
+			return finalScores[i].Score > finalScores[j].Score
+		})
+		fmt.Println("Final Scores:")
+		gsLog = append(gsLog, "Final Scores:")
+		for i, p := range finalScores {
+			scoreStr := fmt.Sprintf("%d. %s: %d points", i+1, p.Name, p.Score)
+			fmt.Println(scoreStr)
+			gsLog = append(gsLog, scoreStr)
+		}
 		fmt.Println("Game Over.")
+		gsLog = append(gsLog, "Game Over.")
+
+		// Optionally print full game log from gameState
+		fmt.Println("\n--- Full Game Log from GameState ---")
+		for _, entry := range gameState.GameLog {
+			fmt.Println(entry)
+		}
+		// Exit or offer new game
+		os.Exit(0)
 	}
-} // End main function
+}
