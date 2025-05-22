@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math/rand"
 	"os"
 	"sort"
+	"time"
 )
 
 // NewGameState initializes a new game state for the given player names.
@@ -12,6 +14,8 @@ func NewGameState(playerNames []string) *GameState {
 	if len(playerNames) != 4 {
 		panic("Must initialize game with exactly 4 players")
 	}
+	rand.Seed(time.Now().UnixNano()) // Seed the random number generator
+
 	deck := GenerateDeck()
 
 	// The dead wall is the *last* 14 tiles of the shuffled deck.
@@ -20,15 +24,20 @@ func NewGameState(playerNames []string) *GameState {
 	deadWall := deck[TotalTiles-DeadWallSize:] // Last 14 tiles
 
 	players := make([]*Player, len(playerNames))
-	winds := []string{"East", "South", "West", "North"} // Initial seating
+	initialDealerIndex := rand.Intn(len(playerNames)) // Randomly select the initial dealer
+
+	winds := []string{"East", "South", "West", "North"}
 	for i, name := range playerNames {
+		// Assign seat wind based on the initial dealer
+		// The dealer is East, then South, West, North in order of player index
+		seatWindIndex := (i - initialDealerIndex + len(playerNames)) % len(playerNames)
 		players[i] = &Player{
 			Name:       name,
 			Hand:       []Tile{},
 			Discards:   []Tile{},
 			Melds:      []Meld{},
 			Score:      25000, // Starting score
-			SeatWind:   winds[i],
+			SeatWind:   winds[seatWindIndex],
 			IsRiichi:   false,
 			RiichiTurn: -1,
 			IsIppatsu:  false,
@@ -37,24 +46,26 @@ func NewGameState(playerNames []string) *GameState {
 	}
 
 	gs := &GameState{
-		Wall:               wall,
-		DeadWall:           deadWall,
-		Players:            players,
-		CurrentPlayerIndex: 0, // East starts
-		DiscardPile:        []Tile{},
-		DoraIndicators:     []Tile{}, // Will hold revealed initial + Kan Dora
-		UraDoraIndicators:  []Tile{}, // Initially hidden, populated on Riichi win reveal
-		PrevalentWind:      "East",   // Assuming East round 1
-		RoundNumber:        1,
-		Honba:              0,
-		RiichiSticks:       0,
-		TurnNumber:         0,
-		GamePhase:          PhaseDealing,
-		InputReader:        bufio.NewReader(os.Stdin),
-		LastDiscard:        nil, // Explicitly nil at start
+		Wall:                 wall,
+		DeadWall:             deadWall,
+		Players:              players,
+		CurrentPlayerIndex:   initialDealerIndex, // Current player to act; dealer starts.
+		DealerIndexThisRound: initialDealerIndex, // Tracks who is dealer for this specific round.
+		DiscardPile:          []Tile{},
+		DoraIndicators:       []Tile{}, // Will hold revealed initial + Kan Dora
+		UraDoraIndicators:    []Tile{}, // Initially hidden, populated on Riichi win reveal
+		PrevalentWind:        "East",   // Assuming East round 1
+		RoundNumber:          1,
+		Honba:                0,
+		RiichiSticks:         0,
+		TurnNumber:           0,
+		GamePhase:            PhaseDealing,
+		InputReader:          bufio.NewReader(os.Stdin),
+		LastDiscard:          nil, // Explicitly nil at start
 		// Initialize new flags for Tenhou/Chihou/Renhou
 		AnyCallMadeThisRound: false,
 		IsFirstGoAround:      true, // Starts as true at the beginning of a round
+		RoundWinner:          nil,  // Initialize RoundWinner
 		// IsChankanOpportunity, IsRinshanWin, IsHouteiDiscard are already initialized to false by Go's default bool.
 	}
 
@@ -85,18 +96,40 @@ func (gs *GameState) RevealInitialDoraIndicator() {
 
 // DealInitialHands deals 13 tiles to each player from the wall.
 func (gs *GameState) DealInitialHands() {
-	// Dealing is complex (4, 4, 4, 1). Simplify to sequential for now.
-	for i := 0; i < HandSize; i++ {
-		for p := 0; p < len(gs.Players); p++ {
-			if len(gs.Wall) > 0 {
+	numPlayers := len(gs.Players)
+	dealerIndex := gs.CurrentPlayerIndex
+
+	// Check if there are enough tiles for everyone (13 tiles * 4 players = 52 tiles)
+	if len(gs.Wall) < HandSize*numPlayers {
+		panic("Not enough tiles in wall to deal initial hands")
+	}
+
+	// Phase 1: Deal 4 tiles to each player, 3 times
+	for i := 0; i < 3; i++ { // 3 passes
+		for j := 0; j < numPlayers; j++ { // Each player
+			playerIndex := (dealerIndex + j) % numPlayers
+			for k := 0; k < 4; k++ { // 4 tiles
+				if len(gs.Wall) == 0 {
+					panic("Not enough tiles in wall during dealing (phase 1)")
+				}
 				tile := gs.Wall[0]
 				gs.Wall = gs.Wall[1:]
-				gs.Players[p].Hand = append(gs.Players[p].Hand, tile)
-			} else {
-				panic("Not enough tiles in wall to deal initial hands")
+				gs.Players[playerIndex].Hand = append(gs.Players[playerIndex].Hand, tile)
 			}
 		}
 	}
+
+	// Phase 2: Deal 1 tile to each player
+	for j := 0; j < numPlayers; j++ { // Each player
+		playerIndex := (dealerIndex + j) % numPlayers
+		if len(gs.Wall) == 0 {
+			panic("Not enough tiles in wall during dealing (phase 2)")
+		}
+		tile := gs.Wall[0]
+		gs.Wall = gs.Wall[1:]
+		gs.Players[playerIndex].Hand = append(gs.Players[playerIndex].Hand, tile)
+	}
+
 	// Sort initial hands
 	for _, player := range gs.Players {
 		sort.Sort(BySuitValue(player.Hand))

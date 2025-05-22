@@ -67,11 +67,36 @@ func IdentifyYaku(player *Player, agariHai Tile, isTsumo bool, gs *GameState) ([
 			yakumanFound = true
 		}
 	}
-	// TODO: checkTsuuiisou (All Honors) - Check if all tiles are honors.
-	// TODO: checkChinroutou (All Terminals) - Check if all tiles are 1s or 9s.
+	// TODO: checkTsuuiisou (All Honors) - Check if all tiles are honors. (Implemented later)
+	// TODO: checkChinroutou (All Terminals) - Check if all tiles are 1s or 9s. (Implemented later)
 	// TODO: checkRyuuiisou (All Green) - Check for specific green tiles (Sou 2,3,4,6,8 + Green Dragon).
-	// TODO: checkChuurenPoutou (Nine Gates) - Specific concealed pure suit pattern. Check for Junsei (9-wait) variant.
+	// TODO: checkChuurenPoutou (Nine Gates) - Specific concealed pure suit pattern. Check for Junsei (9-wait) variant. (Implemented later)
 	// TODO: checkSuukantsu (Four Kans) - Check player.Melds for 4 Kans.
+
+	// "Luck" Yakuman checks (Tenhou, Chihou, Renhou)
+	// These should be checked before other structural Yakuman, as they are very specific to game conditions.
+	if !yakumanFound {
+		if ok, name, han := checkTenhou(player, gs, isTsumo); ok {
+			results = append(results, YakuResult{name, han})
+			totalHan += han
+			yakumanFound = true
+		}
+	}
+	if !yakumanFound {
+		if ok, name, han := checkChihou(player, gs, isTsumo); ok {
+			results = append(results, YakuResult{name, han})
+			totalHan += han
+			yakumanFound = true
+		}
+	}
+	if !yakumanFound {
+		// Renhou is only for Ron. isTsumo is already passed to checkRenhou.
+		if ok, name, han := checkRenhou(player, gs, isTsumo); ok {
+			results = append(results, YakuResult{name, han})
+			totalHan += han
+			yakumanFound = true
+		}
+	}
 
 	if yakumanFound {
 		// If a Yakuman is found, the 'results' list will contain it (or them, if multiple are possible and checked).
@@ -183,11 +208,10 @@ func IdentifyYaku(player *Player, agariHai Tile, isTsumo bool, gs *GameState) ([
 	}
 
 	// Sankantsu (Three Kans)
-	// TODO: Check player.Melds for 3 Kans.
-	// if ok, han := checkSankantsu(player); ok {
-	//     results = append(results, YakuResult{"Sankantsu", 2})
-	//     totalHan += han
-	// }
+	if ok, name, han := checkSankantsu(player); ok {
+		results = append(results, YakuResult{name, han})
+		// totalHan += han // Let final loop sum up
+	}
 
 	// Shousangen (Little Three Dragons) - Cannot be Chiitoitsu
 	if !chiitoitsuFound {
@@ -388,62 +412,69 @@ func checkDaisangen(player *Player, allTiles []Tile) (bool, string, int) {
 // }
 
 
-// checkSuuankou (Four Concealed Pungs/Kans) - Yakuman (13 Han)
-// TODO: Differentiate Suuankou Tanki (double Yakuman if agariHai completes the pair and all 4 pungs were self-formed prior)
+// checkSuuankou (Four Concealed Pungs/Kans) - Yakuman (13 Han) or Double Yakuman (26 Han for Tanki wait)
 func checkSuuankou(player *Player, agariHai Tile, isTsumo bool, isMenzen bool, allTiles []Tile) (bool, string, int) {
 	if !isMenzen {
 		return false, "", 0
 	}
 
-	// Note: DecomposeWinningHand must be robust enough to handle a hand that might be Suuankou.
-	// It should ideally find 4 pungs/kans and 1 pair.
 	decomposition, success := DecomposeWinningHand(player, allTiles)
 	if !success || decomposition == nil || len(decomposition) != 5 {
-		// If standard decomposition fails, it's unlikely to be a standard Suuankou.
-		// For example, if the hand is actually Chiitoitsu or Kokushi.
 		return false, "", 0
 	}
 
 	concealedPungKanCount := 0
-	pairExists := false
+	var pairGroup DecomposedGroup
+	foundPairInDecomp := false
 
 	for _, group := range decomposition {
-		if group.Type == TypePair {
-			pairExists = true
-			continue
-		}
-
-		isActualConcealedMeld := false
-		if group.Type == TypeQuad { // Kan
-			if group.IsConcealed { // Ankan
-				isActualConcealedMeld = true
-			}
-		} else if group.Type == TypeTriplet { // Pung
-			// For a pung to count towards Suuankou:
-			// 1. It must be marked as concealed in the decomposition (meaning it wasn't an open Pon).
-			// 2. If the win is by Ron, the Ron tile (agariHai) must NOT be the tile that completes this pung.
-			//    If Ron tile completes the pung, that specific pung is considered "exposed" for Suuankou purposes.
-			if group.IsConcealed { // Base check: was it formed concealedly?
+		isEffectiveConcealedMeld := false
+		if group.Type == TypeTriplet {
+			// A pung is concealed for Suuankou if it's part of the concealed hand (group.IsConcealed true)
+			// AND if the win is by Ron, the agariHai did NOT complete this pung.
+			if group.IsConcealed {
 				if !isTsumo && groupContainsTileID(group, agariHai.ID) {
-					// This pung was completed by Ron, so it does not count as one of the four "concealed pungs" for Suuankou.
-					isActualConcealedMeld = false
+					// This triplet was completed by Ron, not concealed for Suuankou.
 				} else {
-					// This pung is self-drawn (Tsumo), or Ron on a tile not completing this specific pung.
-					isActualConcealedMeld = true
+					isEffectiveConcealedMeld = true
 				}
 			}
+		} else if group.Type == TypeQuad {
+			if group.IsConcealed { // Ankan
+				isEffectiveConcealedMeld = true
+			}
+			// Open Kans (Daiminkan, Shouminkan) do not count towards concealed pungs.
+			// The initial isMenzen check should prevent hands with open melds other than Ankan,
+			// but this logic reinforces that only Ankans contribute.
+		} else if group.Type == TypePair {
+			if foundPairInDecomp { // Should only be one pair in a valid decomposition
+				return false, "", 0 
+			}
+			pairGroup = group
+			foundPairInDecomp = true
 		}
 
-		if isActualConcealedMeld {
+		if isEffectiveConcealedMeld {
 			concealedPungKanCount++
 		}
 	}
 
-	if concealedPungKanCount == 4 && pairExists {
-		// Standard Suuankou: 4 concealed pungs/kans + 1 pair.
-		// The Tanki wait (winning on the pair tile) is covered if all 4 pungs were already formed.
-		// The logic correctly handles Ron on a pair tile if the 4 pungs are self-made.
-		return true, "Suuankou", 13
+	if concealedPungKanCount == 4 && foundPairInDecomp {
+		// At this point, we have 4 effectively concealed pungs/kans and one pair.
+		// Now, check for the Tanki (pair wait) condition.
+		// The agariHai must be one of the tiles forming the pair.
+		if len(pairGroup.Tiles) == 2 {
+			// Compare agariHai (Suit and Value) with the tiles in the identified pair.
+			// Since pairGroup.Tiles[0] and pairGroup.Tiles[1] form the pair, they should be identical in Suit/Value.
+			if agariHai.Suit == pairGroup.Tiles[0].Suit && agariHai.Value == pairGroup.Tiles[0].Value {
+				// This confirms the agariHai completes the pair. This is Suuankou Tanki.
+				return true, "Suuankou Tanki", 26 // Double Yakuman
+			}
+		}
+		// If agariHai did not complete the pair (e.g., Tsumo completed the 4th pung,
+		// or Ron on a tile that was part of a pung that was already concealed),
+		// it's a standard Suuankou.
+		return true, "Suuankou", 13 // Single Yakuman
 	}
 
 	return false, "", 0
@@ -900,33 +931,17 @@ func calculateTotalHan(results []YakuResult) int {
 // checkTenhou (Blessing of Heaven) - Yakuman (13 Han)
 // Player must be dealer, win by Tsumo on their very first draw, with no intervening calls.
 func checkTenhou(player *Player, gs *GameState, isTsumo bool) (bool, string, int) {
-	// Conceptual checks (actual flag implementation is separate):
-	// 1. Player is dealer (East seat in the first round of the game is a common way to define initial dealer)
-	//    A more robust check would be `gs.Players[gs.DealerPlayerIndex] == player`.
-	//    For now, using SeatWind == "East" AND it's very early in the game.
+	// Robust conditions:
+	// 1. Player is current dealer for this round.
 	// 2. Win by Tsumo.
-	// 3. Player's first draw of the game (gs.TurnNumber roughly indicates this, or a specific !player.HasDrawnThisGameYet flag).
-	// 4. No calls (Pon, Chi, open Kan) have occurred before this Tsumo.
-	
-	// Simplified conditions based on prompt:
-	// player.SeatWind == "East" (initial dealer)
-	// isTsumo
-	// gs.TurnNumber <= 1 (very early in the game, implies first draw for East)
-	// !gs.AnyCallMadeThisRound (conceptual flag for no interruptions)
-
-	// A more precise check for Tenhou would be:
-	// Player is dealer (e.g. gs.Players[gs.DealerIndex] == player)
-	// isTsumo
-	// It is the dealer's very first draw and discard cycle (e.g. gs.TurnNumber == 0 for dealer's draw phase)
-	// No melds (Ankan by dealer before their first discard might be an exception in some rules, but generally not for Tenhou)
-	
-	// Using the conceptual flags from the prompt:
-	// Let's assume a more direct way to check if it's the dealer's first action.
-	// For Tenhou, gs.TurnNumber is typically 0 when the dealer draws their first tile (14th tile).
-	// The win happens *on* this draw.
-	if player.SeatWind == "East" && isTsumo && gs.TurnNumber == 0 && !gs.AnyCallMadeThisRound {
-		// Further refinement could be ensuring player.Discards is empty, player.Melds is empty (or only Ankan if allowed by specific ruleset).
-		// For simplicity, the above conditions are a strong proxy.
+	// 3. Dealer's first draw of the round (gs.TurnNumber == 0 before any player action).
+	// 4. No calls made by anyone this round.
+	// 5. Player has no melds (Ankan would also disqualify Tenhou).
+	if gs.Players[gs.DealerIndexThisRound] == player &&
+		isTsumo &&
+		gs.TurnNumber == 0 && // This implies it's the dealer's very first action/draw.
+		!gs.AnyCallMadeThisRound &&
+		len(player.Melds) == 0 {
 		return true, "Tenhou", 13
 	}
 	return false, "", 0
@@ -935,27 +950,23 @@ func checkTenhou(player *Player, gs *GameState, isTsumo bool) (bool, string, int
 // checkChihou (Blessing of Earth) - Yakuman (13 Han)
 // Non-dealer wins by Tsumo on their very first draw, before their first discard, with no intervening calls.
 func checkChihou(player *Player, gs *GameState, isTsumo bool) (bool, string, int) {
-	// Conceptual checks:
-	// 1. Player is NOT dealer.
+	// Robust conditions:
+	// 1. Player is not current dealer for this round.
 	// 2. Win by Tsumo.
-	// 3. Player's first draw of the round, before their first discard (e.g., !player.HasMadeFirstDiscardThisRound).
-	// 4. No calls by anyone that interrupted the "first go-around" before this player's turn.
-	
-	// Using the conceptual flags from the prompt:
-	// player.SeatWind != "East" (not initial dealer - this is a simplification)
-	// isTsumo
-	// gs.IsFirstGoAround (conceptual: no player has completed their first turn, or no calls made)
-	// !player.HasMadeFirstDiscard (conceptual)
-	// !gs.AnyCallMadeThisRound (conceptual)
+	// 3. Player has not made their first discard yet.
+	// 4. No calls made by anyone this round.
+	// 5. Player has no melds.
+	// 6. It's the player's first draw (implicit: TurnNumber for this player is their first turn number, e.g. 1, 2, or 3 for non-dealers if dealer is 0)
+	//    and HasDrawnFirstTileThisRound would be true.
+	//    A simpler check: gs.TurnNumber must be < number of players, ensuring it's within the first go-around.
+	//    And !player.HasMadeFirstDiscardThisRound effectively means it's their first opportunity to act after drawing.
 
-	// A more precise check for Chihou:
-	// Player is NOT the dealer.
-	// isTsumo
-	// It is the player's very first draw of the round.
-	// No calls (Pon, Chi, open Kan) have occurred by anyone in the round prior to this Tsumo.
-	// (Ankan by another player before this player's turn might be allowed in some rules).
-	if player.SeatWind != "East" && isTsumo && gs.IsFirstGoAround && !player.HasMadeFirstDiscard && !gs.AnyCallMadeThisRound {
-		// Similar to Tenhou, ensure player.Discards is empty for this round, player.Melds is empty (or only Ankan if allowed).
+	if gs.Players[gs.DealerIndexThisRound] != player &&
+		isTsumo &&
+		!player.HasMadeFirstDiscardThisRound && // Player has not discarded yet
+		!gs.AnyCallMadeThisRound &&
+		len(player.Melds) == 0 &&
+		gs.TurnNumber < len(gs.Players) { // Ensures it's within the first cycle of turns
 		return true, "Chihou", 13
 	}
 	return false, "", 0
@@ -965,19 +976,22 @@ func checkChihou(player *Player, gs *GameState, isTsumo bool) (bool, string, int
 // Player wins by Ron on a discard made during the first un-interrupted go-around of turns,
 // before their own first discard.
 func checkRenhou(player *Player, gs *GameState, isTsumo bool) (bool, string, int) {
-	// Conceptual checks:
-	// 1. Win by Ron (!isTsumo).
-	// 2. Player has not yet made their first discard in this round (!player.HasMadeFirstDiscardThisRound).
-	// 3. The discarder made their discard during the "first go-around" with no prior interrupting calls.
-	
-	// Using conceptual flags from the prompt:
-	// !isTsumo
-	// gs.IsFirstGoAround (conceptual)
-	// !player.HasMadeFirstDiscard (conceptual, for the winning player)
-	// !gs.AnyCallMadeThisRound (conceptual, for no interruptions before the Ron)
-	if !isTsumo && gs.IsFirstGoAround && !player.HasMadeFirstDiscard && !gs.AnyCallMadeThisRound {
-		// Renhou's value can vary (Mangan to Yakuman). We'll use 13 for consistency with prompt.
-		return true, "Renhou", 13 
+	// Robust conditions:
+	// 1. Player (winner) is not the dealer of the current round.
+	// 2. Win by Ron.
+	// 3. Winning player has not made their first discard yet this round.
+	// 4. The Ron occurs on a discard made during the first un-interrupted go-around (gs.IsFirstGoAround is true).
+	// 5. No calls made by anyone this round prior to this Ron.
+	// 6. Player (winner) has no melds.
+
+	if player != gs.Players[gs.DealerIndexThisRound] && // Winner is not the dealer of the round
+		!isTsumo && // Win by Ron
+		!player.HasMadeFirstDiscardThisRound && // Winner has not discarded yet
+		gs.IsFirstGoAround && // Discard was made in the first go-around
+		!gs.AnyCallMadeThisRound && // No calls made this round (this flag should be set false on any call)
+		len(player.Melds) == 0 { // Winner has no melds
+		// Renhou's value can vary (Mangan to Yakuman). We'll use 13 for consistency.
+		return true, "Renhou", 13
 	}
 	return false, "", 0
 }
@@ -1063,8 +1077,7 @@ func checkShousuushii(player *Player, allTiles []Tile) (bool, string, int) {
 // }
 
 
-// checkDaisuushii (Big Four Winds) - Yakuman (13 Han)
-// TODO: Daisuushii is often Double Yakuman (26 Han)
+// checkDaisuushii (Big Four Winds) - Double Yakuman (26 Han)
 func checkDaisuushii(player *Player, allTiles []Tile) (bool, string, int) {
 	decomposition, success := DecomposeWinningHand(player, allTiles)
 	if !success || decomposition == nil || len(decomposition) != 5 {
@@ -1102,7 +1115,7 @@ func checkDaisuushii(player *Player, allTiles []Tile) (bool, string, int) {
 	}
 
 	if foundEastPungKan && foundSouthPungKan && foundWestPungKan && foundNorthPungKan && windPungKanCount == 4 && pairFound {
-		return true, "Daisuushii", 13 // Note: Often Double Yakuman (26 Han)
+		return true, "Daisuushii", 26 // Double Yakuman
 	}
 	return false, "", 0
 }
@@ -3114,3 +3127,43 @@ func checkChinitsu(allTiles []Tile, isMenzen bool) (bool, int) {
 // 	// Hand: 123456789s 22s 33s (Menzen Chinitsu)
 // 	// Expected: Only Chinitsu (6 Han) should be awarded by IdentifyYaku. Honitsu should not.
 // }
+
+// checkNagashiMangan (Mangan at Draw) - Mangan (5 Han equivalent, but usually fixed points)
+// Awarded if a player's discards at an exhaustive draw (Ryuukyoku) consist only of terminal and honor tiles,
+// AND none of their discards were called by other players.
+func checkNagashiMangan(player *Player, gs *GameState) (bool, string, int) {
+	// This check is typically done at Ryuukyoku (exhaustive draw).
+	// The GameState (gs) might be needed if the check depends on the game phase being Ryuukyoku,
+	// but for now, player-specific flags and discards are checked.
+
+	if player.HasHadDiscardCalledThisRound {
+		return false, "", 0 // A discard was called, player not eligible
+	}
+
+	// Nagashi Mangan requires the player to have made discards.
+	if len(player.Discards) == 0 {
+		return false, "", 0 
+	}
+
+	for _, tile := range player.Discards {
+		if !isTerminalOrHonor(tile) { // Using the top-level isTerminalOrHonor
+			return false, "", 0 // Found a non-terminal/honor discard
+		}
+	}
+	// All discards are terminals or honors, and none were called by other players.
+	return true, "Nagashi Mangan", 5 // Valued as Mangan (5 Han for calculation purposes if not fixed-point)
+}
+
+// checkSankantsu (Three Kans) - 2 Han
+func checkSankantsu(player *Player) (bool, string, int) {
+	kanCount := 0
+	for _, meld := range player.Melds {
+		if meld.Type == "Ankan" || meld.Type == "Daiminkan" || meld.Type == "Shouminkan" {
+			kanCount++
+		}
+	}
+	if kanCount == 3 {
+		return true, "Sankantsu", 2
+	}
+	return false, "", 0
+}
