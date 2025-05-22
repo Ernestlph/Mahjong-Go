@@ -45,6 +45,7 @@ type Player struct {
 	RiichiTurn int    // Turn number Riichi was declared (-1 if not in Riichi)
 	IsIppatsu  bool   // Eligible for Ippatsu (true between Riichi and next draw/call/own Kan)
 	IsFuriten  bool   // Cannot Ron
+	DeclaredDoubleRiichi bool // True if this player successfully declared Double Riichi
 	// Add other state as needed (e.g., Menzenchin status - can be derived)
 	HasMadeFirstDiscardThisRound bool // True if player has made their first discard in the current round
 	HasDrawnFirstTileThisRound   bool // True if player has drawn their first tile in the current round
