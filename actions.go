@@ -313,6 +313,18 @@ func HandlePonAction(gs *GameState, player *Player, discardedTile Tile) {
 			IsConcealed: false,
 		}
 		player.Melds = append(player.Melds, newMeld)
+		// Set flag for Nagashi Mangan check: the player whose discard was called.
+		if discarderIndex >= 0 && discarderIndex < len(gs.Players) {
+			gs.Players[discarderIndex].HasHadDiscardCalledThisRound = true
+		}
+		// Set flag for Nagashi Mangan check: the player whose discard was called.
+		if discarderIndex >= 0 && discarderIndex < len(gs.Players) {
+			gs.Players[discarderIndex].HasHadDiscardCalledThisRound = true
+		}
+		// Set flag for Nagashi Mangan check: the player whose discard was called.
+		if discarderIndex >= 0 && discarderIndex < len(gs.Players) {
+			gs.Players[discarderIndex].HasHadDiscardCalledThisRound = true
+		}
 		sort.Sort(BySuitValue(player.Hand)) // Keep hand sorted
 
 		fmt.Printf("\n%s PONS %s from P%d!\n", player.Name, discardedTile.Name, discarderIndex+1)
@@ -389,6 +401,18 @@ func HandleChiAction(gs *GameState, player *Player, discardedTile Tile, sequence
 			IsConcealed: false,
 		}
 		player.Melds = append(player.Melds, newMeld)
+		// Set flag for Nagashi Mangan check: the player whose discard was called.
+		if discarderIndex >= 0 && discarderIndex < len(gs.Players) {
+			gs.Players[discarderIndex].HasHadDiscardCalledThisRound = true
+		}
+		// Set flag for Nagashi Mangan check: the player whose discard was called.
+		if discarderIndex >= 0 && discarderIndex < len(gs.Players) {
+			gs.Players[discarderIndex].HasHadDiscardCalledThisRound = true
+		}
+		// Set flag for Nagashi Mangan check: the player whose discard was called.
+		if discarderIndex >= 0 && discarderIndex < len(gs.Players) {
+			gs.Players[discarderIndex].HasHadDiscardCalledThisRound = true
+		}
 		sort.Sort(BySuitValue(player.Hand)) // Keep hand sorted
 
 		fmt.Printf("\n%s CHIS %s from P%d (using %s, %s)!\n",
@@ -464,6 +488,10 @@ func HandleKanAction(gs *GameState, player *Player, targetTile Tile, kanType str
 			newMeld.IsConcealed = false
 			player.Melds = append(player.Melds, newMeld)
 			player.Hand = RemoveTilesByIndices(player.Hand, indicesToRemove)
+			// Set flag for Nagashi Mangan check: the player whose discard was called for Daiminkan.
+			if discarderIndex >= 0 && discarderIndex < len(gs.Players) {
+				gs.Players[discarderIndex].HasHadDiscardCalledThisRound = true
+			}
 			success = true
 		} else {
 			fmt.Printf("Error: Daiminkan declared but found %d matching tiles for %s in hand.\n", count, targetTile.Name)
@@ -817,7 +845,7 @@ func HandleWin(gs *GameState, winner *Player, winningTile Tile, isTsumo bool) {
 	// - Reset Riichi sticks (done in TransferPoints).
 	// - Prepare for next round dealing.
 	fmt.Println("\n--- Round Over ---")
-	// Consider setting a flag gs.RoundWinnerIndex or similar if needed for next round setup.
+	gs.RoundWinner = winner // Set the round winner
 }
 
 // PromptDiscard forces the specified player (usually after a call or Kan) to discard.

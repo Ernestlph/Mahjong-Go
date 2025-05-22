@@ -728,6 +728,29 @@ func CanDeclareRiichi(player *Player, gs *GameState) (bool, []RiichiOption) {
 	if player.Score < 1000 {
 		return false, options // Not enough points
 	}
+
+// CheckKyuushuuKyuuhai checks if a hand qualifies for the Kyuushuu Kyuuhai abortive draw.
+// This is 9 or more unique terminal or honor tiles in the starting hand.
+func CheckKyuushuuKyuuhai(hand []Tile) bool {
+	if len(hand) != 13 { // Should be checked with the initial 13 tiles
+		return false
+	}
+
+	uniqueTerminalsAndHonors := make(map[string]bool)
+	count := 0
+
+	for _, tile := range hand {
+		if IsTerminalOrHonor(tile) {
+			// Use tile.Name as a unique key for the tile type (e.g. "Man 1", "East Wind")
+			// This automatically handles duplicates of the same tile type (e.g. two "Man 1" tiles)
+			if !uniqueTerminalsAndHonors[tile.Name] {
+				uniqueTerminalsAndHonors[tile.Name] = true
+				count++
+			}
+		}
+	}
+	return count >= 9
+}
 	// Must be >= 4 tiles left in the wall
 	if len(gs.Wall) < 4 {
 		return false, options // Not enough wall tiles left for potential Ippatsu/Ura Dora

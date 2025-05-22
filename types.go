@@ -49,6 +49,7 @@ type Player struct {
 	// Add other state as needed (e.g., Menzenchin status - can be derived)
 	HasMadeFirstDiscardThisRound bool // True if player has made their first discard in the current round
 	HasDrawnFirstTileThisRound   bool // True if player has drawn their first tile in the current round
+	HasHadDiscardCalledThisRound bool // True if any of this player's discards in the current round were called for an open meld
 }
 
 // RiichiOption stores details about a possible Riichi declaration
@@ -82,6 +83,9 @@ type GameState struct {
 	IsHouteiDiscard      bool // True if the current discard is the one immediately after the last wall tile was drawn
 	AnyCallMadeThisRound bool // True if any player has made a Chi, Pon, Daiminkan, or Shouminkan this round
 	IsFirstGoAround      bool // True until a player completes their first discard OR a call is made
+
+	RoundWinner          *Player // Tracks the winner of the round, nil if draw
+	DealerIndexThisRound int     // Tracks the index of the player who is dealer for the current round
 }
 
 // --- Sorting Tiles ---
@@ -131,4 +135,19 @@ func (a BySuitValue) Less(i, j int) bool {
 
 	// For numbered suits, sort by value
 	return v1 < v2
+}
+
+// IsTerminal checks if a tile is a terminal tile (1 or 9 of a suit).
+func IsTerminal(tile Tile) bool {
+	return (tile.Suit == "Man" || tile.Suit == "Pin" || tile.Suit == "Sou") && (tile.Value == 1 || tile.Value == 9)
+}
+
+// IsHonor checks if a tile is an honor tile (Wind or Dragon).
+func IsHonor(tile Tile) bool {
+	return tile.Suit == "Wind" || tile.Suit == "Dragon"
+}
+
+// IsTerminalOrHonor checks if a tile is a terminal or an honor tile.
+func IsTerminalOrHonor(tile Tile) bool {
+	return IsTerminal(tile) || IsHonor(tile)
 }
