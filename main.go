@@ -404,32 +404,51 @@ func main() {
 			}
 			// Hanchan End Logic
 			if !gameShouldActuallyEnd {
-				// Check if the game should end based on rounds completed (e.g., South 4)
-				// gameState.RoundNumber is the round counter within the current PrevalentWind (1-4)
-				// gameState.CurrentWindRoundNumber is 1 for East, 2 for South, etc.
-				isLastProgrammedWind := gameState.CurrentWindRoundNumber >= gameState.MaxWindRounds
-				isLastDealerTurnOfFinalWind := gameState.RoundNumber >= 4 // Current dealer completed their 4th turn as dealer for this wind
+				// Yame Conditions Check
+				isLastProgrammedTurn := gameState.CurrentWindRoundNumber >= gameState.MaxWindRounds && gameState.RoundNumber >= 4
+				dealerPlayer := gameState.Players[gameState.DealerIndexThisRound]
+				dealerWinsOrTenpaiAtDraw := (gameState.RoundWinner == dealerPlayer) || (gameState.RoundWinner == nil && dealerPlayer.IsTenpai)
 
-				if isLastProgrammedWind && isLastDealerTurnOfFinalWind {
-					dealerPlayer := gameState.Players[gameState.DealerIndexThisRound] // Dealer of the round that just ended
-					dealerWins := gameState.RoundWinner == dealerPlayer
-					dealerTenpaiAtDraw := (gameState.RoundWinner == nil && dealerPlayer.IsTenpai)
+				if isLastProgrammedTurn && dealerWinsOrTenpaiAtDraw {
+					isDealerTopScorer := true
+					for _, p := range gameState.Players {
+						if p != dealerPlayer && p.Score >= dealerPlayer.Score {
+							isDealerTopScorer = false
+							break
+						}
+					}
 
-					// Standard: Game ends after last programmed round unless dealer wins/tenpai AND is not top.
-					// Simplified: Game ends after South 4 (or equivalent final wind round).
-					// Agari-yame/Tenpai-yame (dealer can choose to end if top) is advanced.
-					if !dealerWins && !dealerTenpaiAtDraw {
-						// Dealer did not win or was not tenpai (if draw), so no renchan on the final turn. Game ends.
-						gameState.AddToGameLog(fmt.Sprintf("Final programmed round (%s %d) completed. Dealer did not win/Tenpai. Game Over.", gameState.PrevalentWind, gameState.RoundNumber))
-						gameShouldActuallyEnd = true
+					if isDealerTopScorer {
+						canChooseYame := true // Condition met for Yame choice
+						choseYame := false
+						if gameState.GetPlayerIndex(dealerPlayer) == 0 { // Human dealer
+							fmt.Printf("%s, you are top and won/Tenpai in the final programmed round. Declare Agari/Tenpai Yame to end the game? (y/n): ", dealerPlayer.Name)
+							if GetPlayerChoice(gameState.InputReader, "") { // Empty prompt string as Printf already displayed it
+								choseYame = true
+							}
+						} else { // AI dealer
+							choseYame = true // AI default: always end if top in final round
+							gameState.AddToGameLog(fmt.Sprintf("AI Dealer %s is top and won/Tenpai, chooses Agari/Tenpai Yame.", dealerPlayer.Name))
+						}
+
+						if choseYame {
+							gameState.AddToGameLog(fmt.Sprintf("%s chose Agari/Tenpai Yame. Game Over.", dealerPlayer.Name))
+							gameShouldActuallyEnd = true
+						} else {
+							// If Yame is declined, game still ends because it's the last programmed turn.
+							gameState.AddToGameLog(fmt.Sprintf("%s declined Yame. Game ends as it's the final programmed round.", dealerPlayer.Name))
+							gameShouldActuallyEnd = true
+						}
 					} else {
-						// Dealer won or was tenpai. Normally, they could choose to continue (if not top) or end.
-						// For simplicity, if it's the absolute last round (e.g., South 4), it ends.
-						// If rules allowed for West round etc., then Renchan would continue.
-						gameState.AddToGameLog(fmt.Sprintf("Final programmed round (%s %d) dealer Renchan. Game ends (standard).", gameState.PrevalentWind, gameState.RoundNumber))
+						// Dealer won/Tenpai in last programmed turn but NOT top scorer. Game ends.
+						gameState.AddToGameLog(fmt.Sprintf("Final programmed round (%s %d) completed. Dealer won/Tenpai but not top. Game Over.", gameState.PrevalentWind, gameState.RoundNumber))
 						gameShouldActuallyEnd = true
 					}
+				} else if isLastProgrammedTurn { // Last programmed turn, but dealer didn't win/Tenpai. Game ends.
+					gameState.AddToGameLog(fmt.Sprintf("Final programmed round (%s %d) completed. Dealer did not win/Tenpai. Game Over.", gameState.PrevalentWind, gameState.RoundNumber))
+					gameShouldActuallyEnd = true
 				}
+				// If not isLastProgrammedTurn, game continues to Renchan/next round logic below.
 			}
 
 			if gameShouldActuallyEnd {
@@ -442,6 +461,8 @@ func main() {
 
 				// Renchan Logic for Honba & Dealer Position
 				if isDealerWin || isDealerTenpaiAtDraw { // Dealer Renchan
+					// If Yame was possible but declined, this Renchan logic might be skipped if gameShouldActuallyEnd was set.
+					// However, the structure implies if gameShouldActuallyEnd is false here, it means it's not the absolute end.
 					gameState.Honba++
 					// DealerIndexThisRound remains the same.
 					gameState.DealerRoundCount++ // This dealer's consecutive rounds as dealer.

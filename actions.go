@@ -973,32 +973,43 @@ func HandleWin(gs *GameState, winner *Player, winningTile Tile, isTsumo bool) {
 
 		// Pao player pays the full amount.
 		var paoAmount int
-		if isTsumo { // Pao player pays what all others would have paid combined.
-			if isWinnerTheDealer { // Dealer Tsumo Yakuman
-				paoAmount = payment.TsumoNonDealerPay * (len(gs.Players) - 1)
-			} else { // Non-dealer Tsumo Yakuman
-				paoAmount = payment.TsumoDealerPay + payment.TsumoNonDealerPay*(len(gs.Players)-2)
+		if isTsumo {
+			// Refined Pao for Tsumo Yakuman: Pao source pays the full Ron value.
+			paoAmount = payment.RonValue // This already includes Honba bonuses for a Ron.
+			gs.AddToGameLog(fmt.Sprintf("PAO Tsumo Yakuman: %s (Pao source) pays full Ron value %d to %s.", paoSourcePlayer.Name, paoAmount, winner.Name))
+			paoSourcePlayer.Score -= paoAmount
+			winner.Score += paoAmount
+			if paoSourcePlayer.Score < 0 {
+				CheckAndHandleBust(gs, paoSourcePlayer, winner)
 			}
-		} else { // Ron Yakuman
+
+			// Winner still gets Riichi sticks
+			if gs.RiichiSticks > 0 {
+				riichiBonus := gs.RiichiSticks * RiichiBet
+				winner.Score += riichiBonus
+				gs.AddToGameLog(fmt.Sprintf("%s also collects %d Riichi stick points.", winner.Name, riichiBonus))
+				gs.RiichiSticks = 0
+			}
+			// Other players pay nothing for the Tsumo Yakuman itself.
+			// Honba is included in the paoAmount (payment.RonValue).
+		} else { // Ron Yakuman (Pao source is the discarder)
 			paoAmount = payment.RonValue // Discarder (Pao source) pays full Ron value
+			gs.AddToGameLog(fmt.Sprintf("PAO Ron Yakuman: %s (Pao source/discarder) pays %d to %s.", paoSourcePlayer.Name, paoAmount, winner.Name))
+			paoSourcePlayer.Score -= paoAmount
+			winner.Score += paoAmount
+			if paoSourcePlayer.Score < 0 {
+				CheckAndHandleBust(gs, paoSourcePlayer, winner)
+			}
+			// Winner still gets Riichi sticks
+			if gs.RiichiSticks > 0 {
+				riichiBonus := gs.RiichiSticks * RiichiBet
+				winner.Score += riichiBonus
+				gs.AddToGameLog(fmt.Sprintf("%s also collects %d Riichi stick points.", winner.Name, riichiBonus))
+				gs.RiichiSticks = 0
+			}
+			// Honba is included in paoAmount.
 		}
-
-		gs.AddToGameLog(fmt.Sprintf("%s (Pao source) pays %d to %s.", paoSourcePlayer.Name, paoAmount, winner.Name))
-		paoSourcePlayer.Score -= paoAmount
-		winner.Score += paoAmount
-		if paoSourcePlayer.Score < 0 {
-			CheckAndHandleBust(gs, paoSourcePlayer, winner)
-		}
-
-		// Winner still gets Riichi sticks
-		if gs.RiichiSticks > 0 {
-			riichiBonus := gs.RiichiSticks * RiichiBet
-			winner.Score += riichiBonus
-			gs.AddToGameLog(fmt.Sprintf("%s also collects %d Riichi stick points.", winner.Name, riichiBonus))
-			gs.RiichiSticks = 0
-		}
-		// Honba is included in the paoAmount via CalculatePointPayment.
-	} else { // Normal Point Transfer
+	} else { // Normal Point Transfer (No Pao, or Pao but not Yakuman)
 		TransferPoints(gs, winner, discarder, isTsumo, payment)
 	}
 
