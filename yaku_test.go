@@ -61,7 +61,6 @@ func setupGameForYameTest(t *testing.T, currentWindRoundNum, maxWindRounds, roun
 		gs.PrevalentWind = "South" // Default for tests
 	}
 
-
 	gs.Players[0].Score = dealerScore // P1 (Dealer for these tests if dealerIndex=0)
 	gs.Players[1].Score = p2Score
 	gs.Players[2].Score = p3Score
@@ -448,10 +447,10 @@ func TestHandleWin_PaoTsumoYakuman_Daisangen(t *testing.T) {
 	// to the Pao logic part of HandleWin. We are testing the Pao payout specifically.
 	// We will directly modify the payment struct to simulate the outcome of CalculatePointPayment for a Yakuman.
 	mockPayment := Payment{
-		RonValue:         expectedPaoPayment,       // This is what Pao player will pay
-		TsumoDealerPay:   YakumanBasePointsDealer,  // For context, not directly used by Pao Tsumo logic
+		RonValue:          expectedPaoPayment,         // This is what Pao player will pay
+		TsumoDealerPay:    YakumanBasePointsDealer,    // For context, not directly used by Pao Tsumo logic
 		TsumoNonDealerPay: YakumanBasePointsNonDealer, // For context
-		Description:      "Yakuman (Daisangen)",
+		Description:       "Yakuman (Daisangen)",
 	}
 
 	// Simplified call path to test TransferPoints under Pao
@@ -465,7 +464,7 @@ func TestHandleWin_PaoTsumoYakuman_Daisangen(t *testing.T) {
 
 	// Manually set values that HandleWin would calculate before Pao logic
 	gs.GamePhase = PhaseInProgress // Will be set to RoundEnd in HandleWin
-	gs.RoundWinner = nil          // Will be set in HandleWin
+	gs.RoundWinner = nil           // Will be set in HandleWin
 
 	// --- Direct call to HandleWin ---
 	// This requires yakuListResults and han to be set up if IdentifyYaku is called inside.
