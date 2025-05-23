@@ -32,6 +32,7 @@ This project is a Go-based implementation of Riichi Mahjong. The following featu
 *   **Game End Conditions:**
     *   Hanchan end (configurable `MaxWindRounds`, e.g., East & South by default).
     *   Player busting (score < 0). Basic game end, no advanced Tobu/Dobon scoring.
+    *   **Agari Yame / Tenpai Yame:** The dealer has the option to end the game if all the following conditions are met: it's the final programmed turn of the game (e.g., South 4), the dealer is the winner of the hand (Agari Yame) or Tenpai in a drawn round (Tenpai Yame), and the dealer is the top-scoring player. If chosen, the game ends immediately. If declined at the absolute end of programmed rounds, the game still ends as per normal round limits.
 
 ### Phase 2: Yaku Implementation & Validation
 *   **Hand Decomposition:** Core logic (`DecomposeWinningHand`) for standard hands.
@@ -71,7 +72,7 @@ This project is a Go-based implementation of Riichi Mahjong. The following featu
     *   Temporary Furiten (missed Ron, lasts until player's next discard).
     *   Permanent Riichi Furiten (missing Ron on a Riichi wait).
 *   **Pao (Responsibility/Liability for Yakuman):**
-    *   Basic Pao implemented for Daisangen, Daisuushii. Liable player pays full Yakuman amount.
+    *   Pao is implemented for Daisangen and Daisuushii. If the Yakuman is achieved by Ron, the liable player (discarder or enabler of the final meld) pays the full Ron value. If achieved by Tsumo, the liable player now pays the winner an amount equivalent to the Ron value of the Yakuman; other players do not contribute to the Yakuman point payment in this Tsumo Pao scenario.
 *   **Ryanhan Shibari (Two-Han Minimum):**
     *   Implemented if Honba >= 5 (configurable). Dora do not count towards minimum.
 
@@ -86,13 +87,10 @@ This project is a Go-based implementation of Riichi Mahjong. The following featu
 *   **Riichi Discard Restrictions:**
     *   Implemented: Riichi player must discard drawn tile if no Kan (using `player.JustDrawnTile`).
 *   **Actions During Riichi:**
-    *   Wait change checks for Ankan/Shouminkan during Riichi (placeholder for `compareWaits`). Ankan/Shouminkan allowed if waits do not change.
+    *   Wait change checks for Ankan/Shouminkan during Riichi are implemented using `checkWaitChangeForRiichiKan` (which utilizes `compareTileSlicesUnordered`). Ankan/Shouminkan are allowed only if the player's waits do not change.
 
 ## Future Enhancements / To-Do (Selected)
 
-*   **Refined Pao Payouts:** For Tsumo, Pao player might split payment with others.
-*   **Agari Yame/Tenpai Yame:** Dealer option to end game if top on last round.
-*   **Wait Change Check (`compareTileSlicesUnordered`):** Fully implement robust comparison.
 *   **AI Player Enhancement.**
 *   **Robust User Interface and Input Validation.**
 *   **Comprehensive Integration Testing.**
